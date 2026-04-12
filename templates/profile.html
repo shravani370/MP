@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Profile</title>
+
+<style>
+body {
+  font-family: Arial;
+  background: #ecffe0;
+}
+
+.container {
+  width: 400px;
+  margin: 100px auto;
+  background: white;
+  padding: 30px;
+  border-radius: 15px;
+  text-align: center;
+}
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+  <h2>👤 Your Profile</h2>
+
+  <p><b>Name:</b> {{ user }}</p>
+  <p><b>Email:</b> {{ email }}</p>
+
+  <button onclick="window.location.href='/'">⬅ Home</button>
+
+</div>
+
+</body>
+</html>

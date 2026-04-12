@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jobs | InterviewPro AI</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;600;800&display=swap" rel="stylesheet">
+
+<style>
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Sora', sans-serif;
+  position: relative;
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  top: 0; left: 0;
+  width: 50%; height: 100%;
+  background: #ecffe0;
+  z-index: -1;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  top: 0; right: 0;
+  width: 50%; height: 100%;
+  background: white;
+  z-index: -1;
+}
+
+/* HEADER */
+.header {
+  display: flex;
+  padding: 20px 40px;
+}
+
+.logo {
+  font-weight: 700;
+  font-size: 28px;
+  color: #16a34a;
+}
+
+/* BACK */
+.back-btn {
+  position: fixed;
+  top: 22px;
+  right: 30px;
+  padding: 10px 20px;
+  border-radius: 25px;
+  background: linear-gradient(90deg, #22c55e, #16a34a);
+  color: white;
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  transition: 0.3s;
+  font-family: 'Sora', sans-serif;
+}
+
+.back-btn:hover { transform: scale(1.06); }
+
+/* PAGE */
+.page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 20px 20px 80px;
+}
+
+/* PAGE TITLE */
+.page-title {
+  text-align: center;
+  margin-bottom: 36px;
+  animation: fadeDown 0.5s ease both;
+}
+
+.page-title h1 {
+  font-size: 38px;
+  font-weight: 800;
+  color: #064e3b;
+}
+
+.page-title p {
+  color: #047857;
+  margin-top: 6px;
+  font-size: 15px;
+}
+
+/* ERROR / WARNING BANNER */
+.error-banner {
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 14px;
+  padding: 14px 20px;
+  margin-bottom: 24px;
+  color: #92400e;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  animation: fadeUp 0.4s ease both;
+}
+
+/* SKILLS CARD */
+.skills-card {
+  background: white;
+  border: 1px solid #c7f9cc;
+  border-radius: 20px;
+  padding: 28px 32px;
+  margin-bottom: 28px;
+  box-shadow: 0 4px 20px rgba(34,197,94,0.1);
+  animation: fadeUp 0.5s ease 0.1s both;
+}
+
+.skills-card h2 {
+  font-size: 17px;
+  font-weight: 700;
+  color: #064e3b;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #f0fdf4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* PILLS */
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pill {
+  padding: 6px 14px;
+  border-radius: 100px;
+  font-size: 13px;
+  font-weight: 400;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #15803d;
+  animation: popIn 0.3s ease both;
+}
+
+/* SECTION LABEL */
+.section-label {
+  font-size: 22px;
+  font-weight: 800;
+  color: #064e3b;
+  margin-bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  animation: fadeDown 0.4s ease 0.2s both;
+}
+
+/* JOB CARD */
+.job-card {
+  background: white;
+  border: 1px solid #c7f9cc;
+  border-radius: 16px;
+  padding: 22px 26px;
+  margin-bottom: 16px;
+  box-shadow: 0 2px 12px rgba(34,197,94,0.07);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  animation: fadeUp 0.5s ease both;
+  transition: 0.3s;
+}
+
+.job-card:hover {
+  transform: translateY(-4px);
+  border-color: #22c55e;
+  box-shadow: 0 6px 20px rgba(34,197,94,0.15);
+}
+
+.job-card:nth-child(1)  { animation-delay: 0.10s; }
+.job-card:nth-child(2)  { animation-delay: 0.15s; }
+.job-card:nth-child(3)  { animation-delay: 0.20s; }
+.job-card:nth-child(4)  { animation-delay: 0.25s; }
+.job-card:nth-child(5)  { animation-delay: 0.30s; }
+.job-card:nth-child(6)  { animation-delay: 0.35s; }
+.job-card:nth-child(7)  { animation-delay: 0.40s; }
+.job-card:nth-child(8)  { animation-delay: 0.45s; }
+.job-card:nth-child(9)  { animation-delay: 0.50s; }
+.job-card:nth-child(10) { animation-delay: 0.55s; }
+
+.job-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.job-info h3 {
+  font-size: 17px;
+  font-weight: 700;
+  color: #064e3b;
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* META TAGS ROW */
+.job-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.meta-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: 100px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.meta-company  { background: #f0fdf4; border: 1px solid #bbf7d0; color: #15803d; }
+.meta-location { background: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8; }
+.meta-salary   { background: #fefce8; border: 1px solid #fde68a; color: #b45309; }
+
+/* APPLY BUTTON */
+.apply-btn {
+  flex-shrink: 0;
+  padding: 12px 24px;
+  border-radius: 12px;
+  background: linear-gradient(90deg, #22c55e, #16a34a);
+  color: white;
+  font-family: 'Sora', sans-serif;
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(34,197,94,0.25);
+  transition: 0.3s;
+  display: inline-block;
+}
+
+.apply-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(34,197,94,0.38);
+}
+
+/* EMPTY STATE */
+.empty {
+  color: #9ca3af;
+  font-size: 14px;
+  font-style: italic;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: #6b7280;
+  background: white;
+  border: 1px solid #c7f9cc;
+  border-radius: 16px;
+  animation: fadeUp 0.5s ease both;
+}
+
+.empty-state .empty-icon {
+  font-size: 40px;
+  margin-bottom: 12px;
+}
+
+.empty-state p {
+  font-size: 15px;
+  color: #047857;
+}
+
+/* BOTTOM BUTTON */
+.bottom-btn {
+  display: block;
+  width: fit-content;
+  margin: 36px auto 0;
+  padding: 14px 32px;
+  border-radius: 12px;
+  background: linear-gradient(90deg, #22c55e, #16a34a);
+  color: white;
+  font-family: 'Sora', sans-serif;
+  font-weight: 600;
+  font-size: 15px;
+  text-decoration: none;
+  text-align: center;
+  box-shadow: 0 4px 14px rgba(34,197,94,0.3);
+  transition: 0.3s;
+}
+
+.bottom-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(34,197,94,0.4);
+}
+
+/* ANIMATIONS */
+@keyframes fadeDown {
+  from { opacity: 0; transform: translateY(-16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes popIn {
+  from { opacity: 0; transform: scale(0.85); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@media (max-width: 600px) {
+  .job-card { flex-direction: column; align-items: flex-start; }
+  .apply-btn { width: 100%; text-align: center; }
+  .page-title h1 { font-size: 28px; }
+}
+
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="logo">InterviewPro AI</div>
+</div>
+
+<a href="/" class="back-btn">⬅ Back to Home</a>
+
+<div class="page">
+
+  <!-- PAGE TITLE -->
+  <div class="page-title">
+    <h1>💼 Jobs For You</h1>
+    <p>
+      {% if role and location %}
+        Showing <strong>{{ role }}</strong> jobs in <strong>{{ location }}</strong>
+      {% elif role %}
+        Showing results for <strong>{{ role }}</strong>
+      {% else %}
+        Matched listings based on your resume
+      {% endif %}
+    </p>
+  </div>
+
+  <!-- WARNING BANNER (fallback messages from app.py) -->
+  {% if error_msg %}
+  <div class="error-banner">
+    ⚠️ {{ error_msg }}
+  </div>
+  {% endif %}
+
+  <!-- EXTRACTED SKILLS (only if resume was uploaded) -->
+  {% if skills %}
+  <div class="skills-card">
+    <h2>🔥 Extracted Skills</h2>
+    <div class="pills">
+      {% for skill in skills.split(',') %}
+        {% set s = skill.strip() %}
+        {% if s %}
+          <span class="pill">{{ s }}</span>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- JOBS LIST -->
+  {% if jobs %}
+
+  <div class="section-label">💼 {{ jobs | length }} Listings Found</div>
+
+  {% for job in jobs %}
+  <div class="job-card">
+    <div class="job-info">
+
+      <h3 title="{{ job.title }}">{{ job.title }}</h3>
+
+      <div class="job-meta">
+        {% if job.company and job.company.display_name %}
+          <span class="meta-tag meta-company">🏢 {{ job.company.display_name }}</span>
+        {% endif %}
+
+        {% if job.location and job.location.display_name %}
+          <span class="meta-tag meta-location">📍 {{ job.location.display_name }}</span>
+        {% endif %}
+
+        {% if job.salary_min and job.salary_max %}
+          <span class="meta-tag meta-salary">
+            💰 {{ job.salary_min | int | string }} – {{ job.salary_max | int | string }}
+          </span>
+        {% elif job.salary_min %}
+          <span class="meta-tag meta-salary">💰 From {{ job.salary_min | int }}</span>
+        {% endif %}
+      </div>
+
+    </div>
+    <a href="{{ job.redirect_url }}" target="_blank" class="apply-btn">Apply Now</a>
+  </div>
+  {% endfor %}
+
+  {% else %}
+
+  <div class="empty-state">
+    <div class="empty-icon">🔍</div>
+    <p>No jobs found. Try a different role or location.</p>
+  </div>
+
+  {% endif %}
+
+  <a href="/job" class="bottom-btn">🔄 Search Again</a>
+
+</div>
+
+</body>
+</html>

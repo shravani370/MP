@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Resume</title>
+
+<style>
+body {
+  margin: 0;
+  background: #ecffe0;
+  font-family: 'Segoe UI', sans-serif;
+}
+
+/* MAIN PAGE */
+.resume {
+  width: 800px;
+  margin: 40px auto;
+  background: white;
+  padding: 50px 60px;
+}
+
+/* HEADER */
+.name {
+  text-align: center;
+  font-size: 38px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.role {
+  text-align: center;
+  font-size: 18px;
+  color: #555;
+  margin-top: 5px;
+}
+
+/* CONTACT */
+.contact {
+  display: flex;
+  justify-content: center;
+  gap: 30px;
+  margin-top: 15px;
+  font-size: 14px;
+  color: #444;
+}
+
+.contact span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* DIVIDER */
+.line {
+  border-bottom: 1px solid #999;
+  margin: 25px 0;
+}
+
+/* SECTION */
+.section {
+  margin-top: 25px;
+}
+
+.section h3 {
+  font-size: 16px;
+  letter-spacing: 2px;
+  margin-bottom: 10px;
+}
+
+/* TEXT */
+.section p {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #333;
+}
+
+/* EDUCATION / EXPERIENCE BLOCK */
+.block {
+  margin-bottom: 15px;
+}
+
+.block .title {
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.block .subtitle {
+  font-weight: bold;
+  margin-top: 3px;
+}
+
+/* SKILLS */
+.skills {
+  display: flex;
+  justify-content: space-between;
+}
+
+.skills ul {
+  padding-left: 18px;
+}
+
+.skills li {
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+@media print {
+  body {
+    background: white;
+  }
+
+  button {
+    display: none;
+
+  }
+
+  .resume {
+    box-shadow: none;
+    margin: 0;
+    width: 100%;
+  }
+}
+</style>
+
+</head>
+
+<body>
+<div class="resume">
+
+<!-- HEADER -->
+<div class="name">{{ data.name }}</div>
+<div class="role">{{ data.role }}</div>
+
+<div class="contact">
+  <span>📞 {{ data.phone }}</span>
+  <span>✉️ {{ data.email }}</span>
+  <span>📍 {{ data.address }}</span>
+</div>
+
+<div class="line"></div>
+
+<!-- ABOUT -->
+<div class="section">
+  <h3>ABOUT ME</h3>
+  <p>{{ data.about }}</p>
+</div>
+
+<div class="line"></div>
+
+<!-- EDUCATION -->
+<div class="section">
+  <h3>EDUCATION</h3>
+
+  <div class="block">
+    <div class="title">{{ data.education }}</div>
+  </div>
+
+</div>
+
+<div class="line"></div>
+
+<!-- EXPERIENCE -->
+<div class="section">
+  <h3>WORK EXPERIENCE</h3>
+
+  {% for exp in data.experience %}
+    <div class="block">
+      <div class="title">{{ exp }}</div>
+    </div>
+  {% endfor %}
+
+</div>
+
+<div class="line"></div>
+
+<!-- SKILLS -->
+<div class="section">
+  <h3>SKILLS</h3>
+
+  <div class="skills">
+    <ul>
+      {% for skill in data.skills[0:2] %}
+      <li>{{ skill }}</li>
+      {% endfor %}
+    </ul>
+
+    <ul>
+      {% for skill in data.skills[2:4] %}
+      <li>{{ skill }}</li>
+      {% endfor %}
+    </ul>
+
+    <ul>
+      {% for skill in data.skills[4:6] %}
+      <li>{{ skill }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+</div>
+
+</div>
+<button onclick="downloadPDF()"  style="display: flex; justify-content: center; align-items: center; margin: 80px auto; padding: 12px 25px; border-radius: 25px; border: none; background: #10b981; color: white; font-weight: bold; cursor: pointer;">
+  ⬇ Download PDF
+</button>
+
+</body>
+<script>
+function downloadPDF() {
+  window.print();
+}
+</script>
+</html>
