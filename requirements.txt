@@ -8,3 +8,10 @@ pypdf
 pandas
 scikit-learn
 openai
+anthropic
+google-generativeai
+werkzeug
+flask-session
+python-dotenv
+restricted-python
+cryptography

@@ -1,31 +1,13 @@
 """
 utils/ai_engine.py — AI Engine (backward-compatible wrapper)
-The main logic now lives in app.py. This module keeps compatibility
-if any other file imports from here.
+Now uses multi-backend abstraction layer (OpenAI, Anthropic, Gemini, Ollama)
 """
-import requests
 import os
 import json
 import logging
+from utils.ai_backends import get_ai_manager
 
 logger = logging.getLogger(__name__)
-
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3")
-
-
-def _ollama(prompt: str) -> str:
-    try:
-        resp = requests.post(
-            OLLAMA_URL,
-            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
-            timeout=60,
-        )
-        resp.raise_for_status()
-        return resp.json().get("response", "").strip()
-    except Exception as e:
-        logger.warning(f"Ollama call failed: {e}")
-        return "[AI unavailable – start Ollama: `ollama serve`]"
 
 
 def generate_question(
@@ -34,6 +16,8 @@ def generate_question(
     history: list = None,
     asked_questions: list = None,
 ) -> str:
+    """Generate an interview question using AI backend"""
+    ai = get_ai_manager()
     asked_str = "\n".join(asked_questions or [])
     history_str = "\n".join(history or [])
     prompt = f"""You are a senior technical interviewer specialising in {topic} (as of 2026).
@@ -49,37 +33,18 @@ Previous conversation:
 Candidate's last answer: {previous_answer}
 
 Return ONLY the question text."""
-    return _ollama(prompt)
+    return ai.generate(prompt)
 
 
 def evaluate_answer(question: str, answer: str) -> dict:
-    prompt = f"""You are a technical interview evaluator assessing 2026-standard practices.
-Evaluate based on LATEST industry best practices and current understanding.
-
-Question: {question}
-Answer: {answer}
-
-Evaluate and respond in valid JSON with keys:
-- score: integer 1-10 (based on current best practices)
-- strengths: short string
-- improvements: short string (based on current standards)
-- verdict: "Excellent" | "Good" | "Average" | "Poor"
-"""
-    raw = _ollama(prompt)
-    try:
-        clean = raw.strip().lstrip("```json").rstrip("```").strip()
-        return json.loads(clean)
-    except Exception:
-        return {
-            "score": 5,
-            "strengths": "Answer provided",
-            "improvements": raw or "Could not evaluate",
-            "verdict": "Average",
-        }
+    """Evaluate answer using AI backend"""
+    ai = get_ai_manager()
+    return ai.evaluate(question, answer)
 
 
 def generate_mcq_questions(role: str, n: int = 10) -> list:
     """Generate MCQ questions for a given role using AI."""
+    ai = get_ai_manager()
     prompt = f"""You are a technical recruiter creating {n} multiple-choice screening questions for a {role} position in 2026.
 Use LATEST industry standards, best practices, and current technologies. Focus on modern approaches and frameworks.
 
@@ -98,7 +63,7 @@ Example format:
 
 Return ONLY the JSON array, no markdown, no text before or after."""
     
-    raw = _ollama(prompt)
+    raw = ai.generate(prompt)
     try:
         # Try to extract JSON from the response
         clean = raw.strip()
@@ -157,6 +122,7 @@ Return ONLY the JSON array, no markdown, no text before or after."""
 
 def generate_coding_questions(role: str, n: int = 2) -> list:
     """Generate coding challenge questions for a given role using AI."""
+    ai = get_ai_manager()
     prompt = f"""You are a technical interviewer creating {n} coding challenges for a {role} position in 2026.
 Use LATEST technologies, frameworks, and best practices. Focus on real-world relevance and modern approaches.
 
@@ -187,7 +153,7 @@ Example:
 
 Return ONLY the JSON array, no markdown, no explanation."""
     
-    raw = _ollama(prompt)
+    raw = ai.generate(prompt)
     try:
         # Try to extract JSON from the response
         clean = raw.strip()

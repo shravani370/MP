@@ -1,10 +1,11 @@
-from flask import Flask, redirect, request, render_template, session, url_for, flash
+from flask import Flask, redirect, request, render_template, session, url_for, flash, jsonify
 import requests
 import sqlite3
 import os
 import tempfile
 from dotenv import load_dotenv
 from utils.ai_engine import generate_question, evaluate_answer
+from utils.auth import hash_password, verify_password, require_csrf, set_secure_session, setup_secure_session, generate_csrf_token, validate_email, validate_password
 from PyPDF2 import PdfReader
 from docx import Document
 from functools import wraps
@@ -14,10 +15,21 @@ import json
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "dev_key")
+app.secret_key = os.getenv("SECRET_KEY", "dev_key_change_in_production")
+
+# Setup secure session configuration
+setup_secure_session(app)
 
 # ── Enumerate filter for Jinja2 (used by screening templates) ──
 app.jinja_env.filters['enumerate'] = enumerate
+
+# ── Context processor for CSRF tokens in all templates ──
+@app.context_processor
+def inject_csrf_token():
+    csrf_token = session.get('csrf_token', '')
+    if not csrf_token:
+        csrf_token = generate_csrf_token()
+    return {"csrf_token": csrf_token}
 
 # ================= DB =================
 def init_db():
@@ -30,9 +42,30 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT,
         email TEXT UNIQUE,
-        password TEXT
+        password TEXT,
+        auth_type TEXT DEFAULT 'email',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    
+    # Database migrations
+    try:
+        cursor.execute("SELECT auth_type FROM users LIMIT 1")
+    except sqlite3.OperationalError:
+        print("Migration: Adding auth_type column to users...")
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN auth_type TEXT DEFAULT 'email'")
+        except:
+            pass
+    
+    try:
+        cursor.execute("SELECT created_at FROM users LIMIT 1")
+    except sqlite3.OperationalError:
+        print("Migration: Adding created_at column to users...")
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        except:
+            pass
     
     # Create screening_results table
     cursor.execute("""
@@ -110,7 +143,6 @@ def login_required(f):
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("REDIRECT_URI", "http://127.0.0.1:5000/callback")
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 
 @app.route("/google-login")
 def google_login():
@@ -156,14 +188,13 @@ def callback():
         cursor.execute("SELECT * FROM users WHERE email=?", (email,))
         if not cursor.fetchone():
             cursor.execute(
-                "INSERT INTO users (name,email,password) VALUES (?,?,?)",
-                (name, email, "google_auth")
+                "INSERT INTO users (name, email, password, auth_type) VALUES (?, ?, ?, ?)",
+                (name, email, "google_auth", "google")
             )
             conn.commit()
         conn.close()
 
-        session["user"] = name
-        session["email"] = email
+        set_secure_session(name, email)
         return redirect("/")
 
     except Exception as e:
@@ -186,19 +217,162 @@ def logout():
     return redirect("/")
 
 # ================= LOGIN / SIGNUP / PROFILE =================
-@app.route("/login")
+@app.route("/login", methods=["GET", "POST"])
 def login():
-    return render_template("login.html")
+    if request.method == "POST":
+        email = request.form.get("email", "").strip()
+        password = request.form.get("password", "").strip()
+        csrf_token = request.form.get("csrf_token")
+        
+        # Validate CSRF
+        if not csrf_token or csrf_token != session.get("csrf_token"):
+            flash("❌ Invalid request (CSRF validation failed)", "error")
+            return render_template("login.html", csrf_token=generate_csrf_token())
+        
+        # Validate inputs
+        if not email or not password:
+            flash("❌ Email and password required", "error")
+            return render_template("login.html", csrf_token=generate_csrf_token())
+        
+        try:
+            conn = sqlite3.connect("users.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT name, email, password FROM users WHERE email=? AND auth_type=?", (email, "email"))
+            user = cursor.fetchone()
+            conn.close()
+            
+            if not user:
+                flash("❌ Invalid email or password", "error")
+                return render_template("login.html", csrf_token=generate_csrf_token())
+            
+            name, stored_email, password_hash = user
+            if not verify_password(password, password_hash):
+                flash("❌ Invalid email or password", "error")
+                return render_template("login.html", csrf_token=generate_csrf_token())
+            
+            # Successful login
+            set_secure_session(name, email)
+            flash("✅ Logged in successfully!", "success")
+            return redirect("/")
+        
+        except Exception as e:
+            flash(f"❌ Login error: {e}", "error")
+            return render_template("login.html", csrf_token=generate_csrf_token())
+    
+    # GET request
+    return render_template("login.html", csrf_token=generate_csrf_token())
 
-@app.route("/signup")
+
+@app.route("/signup", methods=["GET", "POST"])
 def signup():
-    return render_template("signup.html")
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        email = request.form.get("email", "").strip()
+        password = request.form.get("password", "").strip()
+        confirm_password = request.form.get("confirm_password", "").strip()
+        csrf_token = request.form.get("csrf_token")
+        
+        # Validate CSRF
+        if not csrf_token or csrf_token != session.get("csrf_token"):
+            flash("❌ Invalid request (CSRF validation failed)", "error")
+            return render_template("signup.html", csrf_token=generate_csrf_token())
+        
+        # Validate inputs
+        if not name or not email or not password:
+            flash("❌ Name, email, and password required", "error")
+            return render_template("signup.html", csrf_token=generate_csrf_token())
+        
+        if not validate_email(email):
+            flash("❌ Invalid email address", "error")
+            return render_template("signup.html", csrf_token=generate_csrf_token())
+        
+        if password != confirm_password:
+            flash("❌ Passwords do not match", "error")
+            return render_template("signup.html", csrf_token=generate_csrf_token())
+        
+        # Validate password strength
+        is_valid, msg = validate_password(password)
+        if not is_valid:
+            flash(f"❌ {msg}", "error")
+            return render_template("signup.html", csrf_token=generate_csrf_token())
+        
+        try:
+            conn = sqlite3.connect("users.db")
+            cursor = conn.cursor()
+            
+            # Check if email already exists
+            cursor.execute("SELECT email FROM users WHERE email=?", (email,))
+            if cursor.fetchone():
+                conn.close()
+                flash("❌ Email already registered", "error")
+                return render_template("signup.html", csrf_token=generate_csrf_token())
+            
+            # Hash password and insert
+            password_hash = hash_password(password)
+            cursor.execute(
+                "INSERT INTO users (name, email, password, auth_type) VALUES (?, ?, ?, ?)",
+                (name, email, password_hash, "email")
+            )
+            conn.commit()
+            conn.close()
+            
+            # Auto-login
+            set_secure_session(name, email)
+            flash("✅ Account created successfully!", "success")
+            return redirect("/")
+        
+        except sqlite3.IntegrityError:
+            flash("❌ Email already registered", "error")
+            return render_template("signup.html", csrf_token=generate_csrf_token())
+        except Exception as e:
+            flash(f"❌ Signup error: {e}", "error")
+            return render_template("signup.html", csrf_token=generate_csrf_token())
+    
+    # GET request
+    return render_template("signup.html", csrf_token=generate_csrf_token())
 
-@app.route("/profile")
+
+@app.route("/profile", methods=["GET", "POST"])
 def profile():
     if "user" not in session:
         return redirect(url_for("google_login"))
-    return render_template("profile.html")
+    
+    if request.method == "POST":
+        csrf_token = request.form.get("csrf_token")
+        
+        # Validate CSRF
+        if not csrf_token or csrf_token != session.get("csrf_token"):
+            flash("❌ Invalid request (CSRF validation failed)", "error")
+            return render_template("profile.html", csrf_token=generate_csrf_token())
+        
+        # Handle profile update
+        name = request.form.get("name", "").strip()
+        email = session.get("email")
+        
+        if not name:
+            flash("❌ Name is required", "error")
+            return render_template("profile.html", csrf_token=generate_csrf_token())
+        
+        try:
+            conn = sqlite3.connect("users.db")
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET name=? WHERE email=?", (name, email))
+            conn.commit()
+            conn.close()
+            
+            # Update session
+            session["user"] = name
+            session.modified = True
+            
+            flash("✅ Profile updated successfully!", "success")
+            return render_template("profile.html", user=name, csrf_token=generate_csrf_token())
+        
+        except Exception as e:
+            flash(f"❌ Error updating profile: {e}", "error")
+            return render_template("profile.html", csrf_token=generate_csrf_token())
+    
+    # GET request
+    return render_template("profile.html", user=session.get("user"), csrf_token=generate_csrf_token())
 
 # ================= INTERVIEW =================
 @app.route("/start")
@@ -310,10 +484,34 @@ def submit():
     if count >= 5:
         session["messages"] = messages
         session.modified = True
+        
+        # Calculate average score
+        total_score = sum(r.get("score", 0) for r in session["results"])
+        avg_score = total_score / len(session["results"]) if session["results"] else 0
+        avg_score = round(avg_score, 1)
+        
+        # Generate coaching tips
+        coaching_prompt = f"""Based on these answers in a {topic} interview, provide 2-3 key improvement areas (brief bullet points):
+Answers: {[a.get('answer', '') for a in session['answers']]}
+Results: {session['results']}
+
+Keep it concise and actionable."""
+        
+        try:
+            from utils.ai_backends import get_ai_manager
+            ai = get_ai_manager()
+            coaching_tips = ai.generate(coaching_prompt)
+        except:
+            coaching_tips = "Keep practicing and review the feedback provided above."
+        
         return render_template(
             "result.html",
             answers=session["answers"],
-            results=session["results"]
+            results=session["results"],
+            avg_score=avg_score,
+            coaching_tips=coaching_tips,
+            topic=topic,
+            csrf_token=generate_csrf_token()
         )
 
     # ── 6. Generate the next question ──
@@ -435,27 +633,19 @@ def analyze():
         return render_template("resume.html", result="❌ No resume content")
 
     try:
-        response = requests.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={
-                "model": "llama3:latest",
-                "prompt": f"""
-Analyze this resume and provide:
-1. ATS Score
-2. Strengths
-3. Weaknesses
-4. Improvements
+        from utils.ai_backends import get_ai_manager
+        ai = get_ai_manager()
+        prompt = f"""Analyze this resume and provide:
+1. ATS Score (0-100)
+2. Strengths (bullet points)
+3. Weaknesses (bullet points)
+4. Improvements (action items)
 
 Resume:
-{resume_text}
-""",
-                "stream": False
-            },
-            timeout=60
-        )
-        result = response.json().get("response", "No response")
+{resume_text}"""
+        result = ai.generate(prompt)
     except Exception as e:
-        result = f"⚠️ AI not running: {e}"
+        result = f"⚠️ AI error: {e}"
 
     return render_template("resume.html", result=result)
 
@@ -544,24 +734,22 @@ def ats_result():
         session.pop("ats_tmp", None)
 
     try:
-        response = requests.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={
-                "model": "llama3:latest",
-                "prompt": f"""Return ONLY a JSON object. No explanation. No markdown. No extra text. Just raw JSON.
-
-You MUST fill ALL four fields. Do NOT leave any field empty.
-- score: integer from 0 to 100 based on how well the resume matches the job description
-- matched_skills: list of skills found in BOTH the resume and job description
-- missing_skills: list of skills in the job description that are NOT in the resume
-- suggestions: list of exactly 3 specific actionable tips to improve the resume for this job
+        from utils.ai_backends import get_ai_manager
+        ai = get_ai_manager()
+        
+        prompt = f"""Return ONLY a JSON object. No explanation. No markdown. Just raw JSON.
+You MUST fill ALL four fields.
+- score: integer 0-100 based on resume matching job description
+- matched_skills: list of skills in BOTH resume and job description
+- missing_skills: list of skills in job description NOT in resume
+- suggestions: list of exactly 3 specific actionable improvement tips
 
 Format:
 {{
   "score": <integer 0-100>,
   "matched_skills": ["skill1", "skill2"],
   "missing_skills": ["skill1", "skill2"],
-  "suggestions": ["suggestion1", "suggestion2", "suggestion3"]
+  "suggestions": ["tip1", "tip2", "tip3"]
 }}
 
 JOB DESCRIPTION:
@@ -570,18 +758,9 @@ JOB DESCRIPTION:
 RESUME:
 {resume_text}
 
-JSON:""",
-                "stream": False,
-                "num_predict": 2048,
-                "options": {
-                    "temperature": 0,
-                    "num_predict": 2048
-                }
-            },
-            timeout=120
-        )
-
-        raw = response.json().get("response", "").strip()
+JSON:"""
+        
+        raw = ai.generate(prompt).strip()
         print("RAW AI RESPONSE:", raw)
 
         data = None
@@ -627,7 +806,7 @@ JSON:""",
             "score": 0,
             "matched_skills": [],
             "missing_skills": [],
-            "suggestions": [f"AI not responding: {e}"]
+            "suggestions": [f"AI error: {e}"]
         }
 
     return render_template("ats_result.html", data=data)
@@ -707,19 +886,13 @@ def extract_skills_from_resume(file) -> str:
     if not resume_text.strip():
         return ""
     try:
-        ai_response = requests.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={
-                "model": "llama3:latest",
-                "prompt": (
-                    "Extract a comma-separated list of technical skills from this resume. "
-                    "Return ONLY the skills, nothing else:\n\n" + resume_text
-                ),
-                "stream": False
-            },
-            timeout=60
-        )
-        return ai_response.json().get("response", "").strip()
+        from utils.ai_backends import get_ai_manager
+        ai = get_ai_manager()
+        prompt = f"""Extract a comma-separated list of technical skills from this resume.
+Return ONLY the skills, nothing else (no markdown, no explanation):
+
+{resume_text}"""
+        return ai.generate(prompt).strip()
     except Exception as e:
         print("AI skill extraction error:", e)
         return ""
@@ -1024,6 +1197,9 @@ def cover_letter():
         
         try:
             # Generate cover letter using AI
+            from utils.ai_backends import get_ai_manager
+            ai = get_ai_manager()
+            
             prompt = f"""Write a professional cover letter for:
 - Name: {name}
 - Role: {role}
@@ -1033,14 +1209,7 @@ def cover_letter():
 
 Write a compelling, personalized 3-4 paragraph cover letter. No salutation/date needed, just the body."""
             
-            # Call Ollama AI
-            response = requests.post(
-                f"{OLLAMA_URL}/api/generate",
-                json={"model": "llama3:latest", "prompt": prompt, "stream": False},
-                timeout=60,
-            )
-            response.raise_for_status()
-            letter = response.json().get("response", "").strip()
+            letter = ai.generate(prompt).strip()
             
             if not letter:
                 flash("❌ AI failed to generate letter. Try again.", "error")

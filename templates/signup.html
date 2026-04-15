@@ -140,12 +140,11 @@ a {
     <h2>Create Account</h2>
 
     <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input name="name" placeholder="Full Name" required>
-       <input type="text" id="email" placeholder="Enter email">
-<p id="error" style="color:red;"></p>
-
-<button onclick="checkEmail()">Continue</button>
-        <input type="password" name="password" placeholder="Password" required>
+      <input type="email" name="email" placeholder="Email" required>
+      <input type="password" name="password" placeholder="Password" required>
+      <input type="password" name="confirm_password" placeholder="Confirm Password" required>
 
       <button type="submit">Sign Up</button>
     </form>

@@ -624,42 +624,84 @@ def _login_required(f):
 
 
 def _run_code(code: str, test_cases: list, func_name: str) -> dict:
-    SAFE_BUILTINS = {
+    """
+    Run code safely using RestrictedPython.
+    This is more secure than raw exec() but still not bulletproof.
+    For production, consider using a containerized executor (Docker, WebAssembly, etc).
+    """
+    try:
+        from restricted_python import compile_restricted, safe_globals
+        from restricted_python.guards import safe_builtins, guarded_iter_unpack_sequence
+    except ImportError:
+        # Fallback if RestrictedPython not available
+        return {"error": "Code execution engine not available", "passed": 0, "total": len(test_cases), "results": []}
+    
+    # Additional safe builtins for code execution
+    SAFE_BUILTINS = safe_builtins.copy()
+    SAFE_BUILTINS.update({
         "range": range, "len": len, "enumerate": enumerate, "zip": zip,
         "sorted": sorted, "list": list, "dict": dict, "set": set,
         "int": int, "str": str, "bool": bool, "float": float,
         "abs": abs, "min": min, "max": max, "sum": sum,
-        "print": print, "isinstance": isinstance, "type": type,
-        "tuple": tuple, "round": round, "any": any, "all": all,
+        "isinstance": isinstance, "type": type, "tuple": tuple,
+        "round": round, "any": any, "all": all,
         "chr": chr, "ord": ord, "map": map, "filter": filter,
-    }
-    ns = {"__builtins__": SAFE_BUILTINS}
+    })
+    
     try:
-        exec(compile(code, "<sandbox>", "exec"), ns)
+        # Compile with RestrictedPython
+        byte_code = compile_restricted(code, "<sandbox>", "exec")
+        
+        if byte_code.errors:
+            error_msg = "; ".join(str(e) for e in byte_code.errors)
+            return {"error": f"Syntax error: {error_msg}", "passed": 0, "total": len(test_cases), "results": []}
+        
+        # Create safe execution namespace
+        ns = {
+            "__builtins__": SAFE_BUILTINS,
+            "_print_": lambda x: repr(x),
+            "_getiter_": iter,
+            "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
+        }
+        
+        # Execute compiled code
+        exec(byte_code, ns)
+        
     except SyntaxError as e:
         return {"error": f"Syntax error: {e}", "passed": 0, "total": len(test_cases), "results": []}
     except Exception as e:
-        return {"error": str(e), "passed": 0, "total": len(test_cases), "results": []}
-
+        return {"error": f"Execution error: {str(e)[:100]}", "passed": 0, "total": len(test_cases), "results": []}
+    
+    # Get function from namespace
     fn = ns.get(func_name)
     if fn is None:
         return {"error": f"Function '{func_name}' not found.", "passed": 0, "total": len(test_cases), "results": []}
-
+    
+    # Run test cases
     results = []
     for tc in test_cases:
         try:
-            out = fn(*tc["input"])
+            # Extract input - handle both list and tuple formats
+            test_input = tc.get("input", [])
+            if isinstance(test_input, (list, tuple)):
+                out = fn(*test_input)
+            else:
+                out = fn(test_input)
+            
             exp = tc["expected"]
+            
+            # Compare results (handle floating point comparisons)
             if isinstance(exp, set):
                 ok = set(out) == exp
             elif isinstance(exp, list) and exp and isinstance(exp[0], float):
                 ok = all(abs(a - b) < 1e-6 for a, b in zip(out, exp)) and len(out) == len(exp)
             else:
                 ok = out == exp
+            
             results.append({"passed": ok, "output": repr(out), "expected": repr(exp)})
         except Exception as e:
-            results.append({"passed": False, "output": f"Error: {e}", "expected": repr(tc["expected"])})
-
+            results.append({"passed": False, "output": f"Error: {str(e)[:50]}", "expected": repr(tc["expected"])})
+    
     passed = sum(1 for r in results if r["passed"])
     return {"results": results, "passed": passed, "total": len(test_cases), "error": None}
 
@@ -679,7 +721,7 @@ def level1():
     session["screening_stage"] = 1
     session["mcq_start"] = time.time()
 
-    # Generate MCQ questions using AI - ALWAYS use latest, never use outdated pools
+    # Try to generate MCQ questions using AI first
     questions = generate_mcq_questions(role, n=10)
     
     # Retry if first attempt fails
@@ -688,6 +730,28 @@ def level1():
         questions = generate_mcq_questions(role, n=10)
         retry += 1
     
+    # Fallback to hardcoded MCQ pool if AI generation failed
+    if not questions:
+        role_lower = role.lower()
+        pool_key = None
+        
+        # Try to find matching pool by role name
+        for key in MCQ_POOLS.keys():
+            if key.lower() in role_lower or role_lower in key.lower():
+                pool_key = key
+                break
+        
+        # Use default pool if no exact match found
+        if not pool_key:
+            pool_key = "default"
+        
+        # Sample 10 random questions from the pool
+        if pool_key in MCQ_POOLS and MCQ_POOLS[pool_key]:
+            questions = random.sample(MCQ_POOLS[pool_key], min(10, len(MCQ_POOLS[pool_key])))
+        else:
+            # Last resort: use default pool
+            questions = random.sample(MCQ_POOLS.get("default", []), min(10, len(MCQ_POOLS.get("default", []))))
+
     session["mcq_questions"] = questions if questions else []
 
     return render_template("screening/level1.html",
@@ -748,7 +812,7 @@ def level2():
     role = session.get("pending_role", "Software Engineer")
     session["code_start"] = time.time()
     
-    # Generate coding questions using AI - ALWAYS use latest, never use outdated pools
+    # Generate coding questions using AI
     questions = generate_coding_questions(role, n=2)
     
     # Retry if first attempt fails
@@ -756,6 +820,28 @@ def level2():
     while not questions and retry < 2:
         questions = generate_coding_questions(role, n=2)
         retry += 1
+    
+    # Fallback to hardcoded coding pool if AI generation failed
+    if not questions:
+        role_lower = role.lower()
+        pool_key = None
+        
+        # Try to find matching pool by role name
+        for key in CODING_POOLS.keys():
+            if key.lower() in role_lower or role_lower in key.lower():
+                pool_key = key
+                break
+        
+        # Use data analyst pool as default if no exact match found
+        if not pool_key:
+            pool_key = "data analyst"
+        
+        # Sample 2 random questions from the pool
+        if pool_key in CODING_POOLS and CODING_POOLS[pool_key]:
+            questions = random.sample(CODING_POOLS[pool_key], min(2, len(CODING_POOLS[pool_key])))
+        else:
+            # Last resort: use data analyst pool
+            questions = random.sample(CODING_POOLS.get("data analyst", []), min(2, len(CODING_POOLS.get("data analyst", []))))
     
     session["coding_questions"] = questions if questions else []
 

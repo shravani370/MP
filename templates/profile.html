@@ -148,23 +148,9 @@ input::placeholder,textarea::placeholder{color:var(--gray-400);font-weight:300}
       {% endwith %}
 
       <form method="POST" action="/profile">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label>Full Name</label>
-        <input type="text" name="name" value="{{ user_row['name'] if user_row else '' }}" required placeholder="Your full name"/>
-
-        <label>Email</label>
-        <input type="email" value="{{ user_row['email'] if user_row else '' }}" readonly placeholder="your@email.com"/>
-
-        <label>Phone</label>
-        <input type="text" name="phone" value="{{ user_row['phone'] if user_row and user_row['phone'] else '' }}" placeholder="+91 98765 43210"/>
-
-        <label>City / Address</label>
-        <input type="text" name="address" value="{{ user_row['address'] if user_row and user_row['address'] else '' }}" placeholder="Mumbai, India"/>
-
-        <label>Bio</label>
-        <textarea name="bio" placeholder="Tell us a bit about yourself and your career goals…">{{ user_row['bio'] if user_row and user_row['bio'] else '' }}</textarea>
-
-        <label>My Skills <span style="color:var(--gray-400);font-weight:300;text-transform:none;letter-spacing:0">(comma-separated)</span></label>
-        <input type="text" name="skills" value="{{ user_row['skills'] if user_row and user_row['skills'] else '' }}" placeholder="Python, SQL, React, Machine Learning…"/>
+        <input type="text" name="name" value="{{ user or '' }}" required placeholder="Your full name"/>
 
         <button type="submit" class="submit-btn">💾 Save Changes</button>
       </form>
