@@ -1,9 +1,10 @@
+flask
+PyPDF2
+python-docx
+requests
+gunicorn
 streamlit
 pypdf
-python-docx
 pandas
 scikit-learn
 openai
-gunicorn
-flask
-PyPDF2

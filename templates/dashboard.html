@@ -1,5 +1,173 @@
-<h2>Your Performance</h2>
-<ul>
-<li>ML: 7/10</li>
-<li>DL: 6/10</li>
-</ul>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Dashboard – PrepAI</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0a0e1a;--surface:#111827;--card:#1a2235;--border:#2a3a55;
+    --accent:#6366f1;--accent2:#22d3ee;--text:#f1f5f9;--muted:#64748b;
+    --success:#10b981;--warning:#f59e0b;--danger:#ef4444;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',sans-serif;min-height:100vh;}
+  nav{background:var(--surface);border-bottom:1px solid var(--border);padding:1rem 2rem;
+      display:flex;justify-content:space-between;align-items:center;}
+  nav a{color:var(--text);text-decoration:none;margin-left:1.5rem;font-size:.9rem;opacity:.8;}
+  nav a:hover{opacity:1;color:var(--accent2);}
+  .logo{font-weight:700;font-size:1.2rem;color:var(--accent2);}
+  .page{max-width:1100px;margin:0 auto;padding:2.5rem 1.5rem;}
+  h1{font-size:1.8rem;font-weight:700;margin-bottom:.3rem;}
+  .subtitle{color:var(--muted);margin-bottom:2rem;}
+  .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1.2rem;margin-bottom:2rem;}
+  .stat-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1.4rem;text-align:center;}
+  .stat-val{font-size:2.2rem;font-weight:800;color:var(--accent2);}
+  .stat-label{font-size:.8rem;color:var(--muted);margin-top:.3rem;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-bottom:2rem;}
+  @media(max-width:700px){.grid2{grid-template-columns:1fr;}}
+  .panel{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1.5rem;}
+  .panel h2{font-size:1rem;font-weight:600;margin-bottom:1rem;color:var(--accent);}
+  table{width:100%;border-collapse:collapse;font-size:.88rem;}
+  th{color:var(--muted);font-weight:600;padding:.5rem .8rem;text-align:left;border-bottom:1px solid var(--border);}
+  td{padding:.6rem .8rem;border-bottom:1px solid var(--border)20;}
+  tr:last-child td{border:none;}
+  .badge{display:inline-block;padding:.2rem .6rem;border-radius:99px;font-size:.75rem;font-weight:600;}
+  .badge-good{background:#10b98120;color:var(--success);}
+  .badge-avg{background:#f59e0b20;color:var(--warning);}
+  .badge-poor{background:#ef444420;color:var(--danger);}
+  .btn{display:inline-block;padding:.7rem 1.4rem;border-radius:8px;text-decoration:none;
+       font-weight:600;font-size:.9rem;cursor:pointer;border:none;transition:.2s;}
+  .btn-primary{background:var(--accent);color:#fff;}
+  .btn-primary:hover{background:#4f46e5;}
+  .cta{display:flex;gap:1rem;margin-top:1rem;flex-wrap:wrap;}
+</style>
+</head>
+<body>
+<nav>
+  <span class="logo">⚡ PrepAI</span>
+  <div>
+    <a href="/">Home</a>
+    <a href="/job">Jobs</a>
+    <a href="/ats">ATS</a>
+    <a href="/cover_letter">Cover Letter</a>
+    <a href="/profile">Profile</a>
+    <a href="/logout">Logout</a>
+  </div>
+</nav>
+<div class="page">
+  <h1>Welcome back, {{ user.name }} 👋</h1>
+  <p class="subtitle">Track your interview performance and career progress</p>
+
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-val">{{ sessions|length }}</div>
+      <div class="stat-label">Sessions Completed</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-val" id="avgScore">–</div>
+      <div class="stat-label">Average Score</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-val" id="bestScore">–</div>
+      <div class="stat-label">Best Score</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-val" id="topTopic">–</div>
+      <div class="stat-label">Top Topic</div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h2>📈 Score Trend</h2>
+      <canvas id="scoreChart" height="200"></canvas>
+    </div>
+    <div class="panel">
+      <h2>🎯 Topic Breakdown</h2>
+      <canvas id="topicChart" height="200"></canvas>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-bottom:2rem;">
+    <h2>📋 Recent Sessions</h2>
+    {% if sessions %}
+    <table>
+      <thead><tr><th>Topic</th><th>Mode</th><th>Score</th><th>Date</th></tr></thead>
+      <tbody>
+      {% for s in sessions %}
+      <tr>
+        <td>{{ s.topic }}</td>
+        <td>{{ s.mode }}</td>
+        <td>
+          {% if s.score %}
+            {% set sc = s.score %}
+            <span class="badge {% if sc >= 7 %}badge-good{% elif sc >= 5 %}badge-avg{% else %}badge-poor{% endif %}">
+              {{ sc }}/10
+            </span>
+          {% else %}–{% endif %}
+        </td>
+        <td>{{ s.created_at[:10] if s.created_at else '–' }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--muted)">No sessions yet. Start your first interview!</p>
+    {% endif %}
+    <div class="cta">
+      <a href="/mock" class="btn btn-primary">Start New Interview</a>
+      <a href="/ats" class="btn btn-primary" style="background:#0e7490;">Analyze Resume</a>
+    </div>
+  </div>
+</div>
+
+<script type="application/json" id="sessionData">{{ sessions | tojson }}</script>
+
+<script>
+const sessions = JSON.parse(document.getElementById('sessionData').textContent || '[]');
+
+// Compute stats
+const scores = sessions.filter(s => s.score != null).map(s => s.score);
+if(scores.length){
+  document.getElementById('avgScore').textContent = (scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1);
+  document.getElementById('bestScore').textContent = Math.max(...scores).toFixed(1);
+}
+const topicCounts = {};
+sessions.forEach(s=>{ topicCounts[s.topic]=(topicCounts[s.topic]||0)+1; });
+const topTopic = Object.entries(topicCounts).sort((a,b)=>b[1]-a[1])[0];
+if(topTopic) document.getElementById('topTopic').textContent = topTopic[0];
+
+// Score trend chart
+const scoreCtx = document.getElementById('scoreChart').getContext('2d');
+new Chart(scoreCtx,{
+  type:'line',
+  data:{
+    labels: sessions.map((_,i)=>`Session ${sessions.length-i}`).reverse(),
+    datasets:[{
+      label:'Score',
+      data: [...sessions].reverse().map(s=>s.score||0),
+      borderColor:'#6366f1',
+      backgroundColor:'#6366f120',
+      fill:true,tension:.4,pointRadius:5
+    }]
+  },
+  options:{scales:{y:{min:0,max:10,grid:{color:'#2a3a55'}},x:{grid:{color:'#2a3a55'}}},
+           plugins:{legend:{labels:{color:'#f1f5f9'}}}}
+});
+
+// Topic donut
+const topicCtx = document.getElementById('topicChart').getContext('2d');
+new Chart(topicCtx,{
+  type:'doughnut',
+  data:{
+    labels: Object.keys(topicCounts),
+    datasets:[{data:Object.values(topicCounts),
+      backgroundColor:['#6366f1','#22d3ee','#10b981','#f59e0b','#ef4444']}]
+  },
+  options:{plugins:{legend:{position:'bottom',labels:{color:'#f1f5f9'}}}}
+});
+</script>
+</body>
+</html>

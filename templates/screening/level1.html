@@ -133,8 +133,11 @@ body { font-family: 'Sora', sans-serif; min-height: 100vh; background: var(--cre
   </form>
 </div>
 
+<script type="application/json" id="durationData">{{ duration|safe }}</script>
+
 <script>
-var total = {{ duration }};
+  const durationValue = JSON.parse(document.getElementById('durationData').textContent || '0');
+  var total = durationValue;
 var elapsed = 0;
 var interval = setInterval(function() {
   elapsed++;

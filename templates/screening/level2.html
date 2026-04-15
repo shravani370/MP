@@ -99,8 +99,11 @@ textarea.code-editor:focus{border-color:var(--g400);box-shadow:0 0 0 3px rgba(34
   </form>
 </div>
 
+<script type="application/json" id="durationData">{{ duration|safe }}</script>
+
 <script>
-var total = {{ duration }};
+  const durationValue = JSON.parse(document.getElementById('durationData').textContent || '0');
+  var total = durationValue;
 var elapsed = 0;
 var interval = setInterval(function(){
   elapsed++;

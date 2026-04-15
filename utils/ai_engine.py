@@ -1,247 +1,244 @@
+"""
+utils/ai_engine.py — AI Engine (backward-compatible wrapper)
+The main logic now lives in app.py. This module keeps compatibility
+if any other file imports from here.
+"""
 import requests
-import random
-import re
+import os
 import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3")
 
 
-OLLAMA_URL = "http://localhost:11434"
-MODEL = "llama3"
-
-
-# ========== QUESTION GENERATOR ==========
-def generate_question(topic, previous_answer=None, history=None, asked_questions=None):
-    """
-    Generate natural, conversational interview questions.
-    Uses the full conversation history so the model actually listens.
-    """
-    if history is None:
-        history = []
-    if asked_questions is None:
-        asked_questions = []
-
-    question_count = len(asked_questions)
-
-    # ── Opening question (no previous answer yet) ──
-    if previous_answer is None:
-        return (
-            f"Hi, welcome! Thanks for coming in today. "
-            f"Let's start simple — can you tell me a bit about yourself and your background in {topic}?"
-        )
-
-    # ── Build conversation context for the LLM ──
-    convo_lines = []
-    for msg in history[-8:]:  # last 8 messages for context window
-        if isinstance(msg, dict):
-            role = "Interviewer" if msg.get("role") == "ai" else "Candidate"
-            convo_lines.append(f"{role}: {msg.get('text', '')}")
-        elif isinstance(msg, str):
-            convo_lines.append(msg)
-
-    conversation_so_far = "\n".join(convo_lines) if convo_lines else "(conversation just started)"
-
-    # ── Build the prompt ──
-    prompt = f"""You are Alex, a friendly but sharp HR interviewer at a tech company.
-You are interviewing a candidate for a {topic} role.
-
-Here is the conversation so far:
-{conversation_so_far}
-
-The candidate just said:
-"{previous_answer}"
-
-Your job: Ask ONE short, natural follow-up question.
-
-Rules:
-- Sound like a real human interviewer, not a quiz machine
-- Reference something SPECIFIC the candidate just said
-- Do NOT repeat any previous question
-- Do NOT evaluate or give feedback — just ask a question
-- Keep it to 1-2 sentences max
-- Use casual, warm language: "Oh interesting, so...", "Got it — what about...", "Tell me more about...", "How did that go?", "What happened next?"
-- If they mentioned a project, ask about it
-- If they mentioned a challenge, ask how they resolved it
-- If their answer was vague, ask them to give a concrete example
-- Do NOT start with "Great!", "Excellent!", "Wonderful!" or similar hollow praise
-
-Respond with ONLY the question. No preamble, no label, nothing else."""
-
+def _ollama(prompt: str) -> str:
     try:
-        response = requests.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={
-                "model": MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": 0.85,
-                    "top_p": 0.9,
-                    "num_predict": 80,
-                }
-            },
-            timeout=30
+        resp = requests.post(
+            OLLAMA_URL,
+            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
+            timeout=60,
         )
-        result = response.json().get("response", "").strip()
-        question = result.split("\n")[0].strip()
-
-        if not question:
-            return _fallback_question(previous_answer, topic)
-
-        if "?" not in question:
-            question = question.rstrip(".") + "?"
-
-        # Avoid near-duplicate questions
-        for prev_q in (asked_questions or [])[-3:]:
-            if question.lower()[:40] == prev_q.lower()[:40]:
-                return _fallback_question(previous_answer, topic)
-
-        print(f"[Q{question_count}] {question}")
-        return question
-
+        resp.raise_for_status()
+        return resp.json().get("response", "").strip()
     except Exception as e:
-        print(f"[ai_engine] generate_question error: {e}")
-        return _fallback_question(previous_answer, topic)
+        logger.warning(f"Ollama call failed: {e}")
+        return "[AI unavailable – start Ollama: `ollama serve`]"
 
 
-def _fallback_question(answer, topic):
-    answer_lower = answer.lower()
-    if "challenge" in answer_lower or "difficult" in answer_lower or "problem" in answer_lower:
-        return "How did you end up resolving that?"
-    elif "team" in answer_lower or "colleague" in answer_lower:
-        return "What was your specific role in that team?"
-    elif "project" in answer_lower or "built" in answer_lower or "developed" in answer_lower:
-        return "What was the biggest technical decision you made on that project?"
-    elif "learned" in answer_lower or "realized" in answer_lower:
-        return "How did that change the way you approach things now?"
-    else:
-        return f"Can you give me a concrete example of that in your {topic} work?"
+def generate_question(
+    topic: str,
+    previous_answer: str = "",
+    history: list = None,
+    asked_questions: list = None,
+) -> str:
+    asked_str = "\n".join(asked_questions or [])
+    history_str = "\n".join(history or [])
+    prompt = f"""You are a senior technical interviewer specialising in {topic} (as of 2026).
+Focus on LATEST industry practices, modern frameworks, and current best practices.
+Generate ONE concise, relevant interview question that tests current knowledge.
+
+Do NOT repeat any question from this list:
+{asked_str}
+
+Previous conversation:
+{history_str}
+
+Candidate's last answer: {previous_answer}
+
+Return ONLY the question text."""
+    return _ollama(prompt)
 
 
-# ========== ANSWER EVALUATOR ==========
-def evaluate_answer(question, answer):
-    """
-    Evaluate the candidate's answer and return natural interviewer feedback.
-    Returns a dict: { score, feedback, strength, area_to_improve }
-    """
+def evaluate_answer(question: str, answer: str) -> dict:
+    prompt = f"""You are a technical interview evaluator assessing 2026-standard practices.
+Evaluate based on LATEST industry best practices and current understanding.
 
-    if not answer or len(answer.strip()) < 15:
-        return {
-            "score": 2,
-            "feedback": "Hmm, I need a bit more to go on there. Can you expand on that?",
-            "strength": "Attempted to answer",
-            "area_to_improve": "Provide more detail and context"
-        }
+Question: {question}
+Answer: {answer}
 
-    prompt = f"""You are Alex, a friendly but sharp HR interviewer.
-The candidate just answered your interview question.
-
-Your Question: {question}
-Candidate's Answer: {answer}
-
-Evaluate the answer honestly. Then write a SHORT, NATURAL interviewer reaction — the kind of thing a real person says mid-interview.
-
-Rules for your reaction:
-- 1-3 sentences MAX
-- Sound natural and human — like you're actually listening
-- Do NOT use hollow openers like "Great!", "Excellent!", "Wonderful!"
-- If the answer is strong, acknowledge it briefly and move on
-- If the answer is weak or vague, gently push back or note what's missing
-- Reference something SPECIFIC they said
-- Use casual, warm language
-
-Then provide a JSON object on a new line (and ONLY JSON after that) in this exact format:
-{{"score": <integer 1-10>, "strength": "<one phrase>", "area_to_improve": "<one phrase>"}}
-
-Example output:
-Yeah, that makes sense — I like that you mentioned the actual impact on load times. Good example.
-{{"score": 8, "strength": "Concrete metrics included", "area_to_improve": "Could mention team collaboration"}}"""
-
+Evaluate and respond in valid JSON with keys:
+- score: integer 1-10 (based on current best practices)
+- strengths: short string
+- improvements: short string (based on current standards)
+- verdict: "Excellent" | "Good" | "Average" | "Poor"
+"""
+    raw = _ollama(prompt)
     try:
-        response = requests.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={
-                "model": MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": 0.7,
-                    "num_predict": 150,
-                }
-            },
-            timeout=30
-        )
-        raw = response.json().get("response", "").strip()
-        print(f"[evaluate_answer raw] {raw}")
-
-        # Split feedback text from JSON
-        lines = [l.strip() for l in raw.split("\n") if l.strip()]
-        feedback_lines = []
-        json_data = None
-
-        for line in lines:
-            if line.startswith("{"):
-                try:
-                    json_data = json.loads(line)
-                    break
-                except Exception:
-                    pass
-            else:
-                feedback_lines.append(line)
-
-        feedback = " ".join(feedback_lines).strip()
-        if not feedback:
-            feedback = _fallback_feedback(answer)
-
-        score = 5
-        strength = "Relevant answer given"
-        area = "Add more specific examples"
-
-        if json_data:
-            score = max(1, min(10, int(json_data.get("score", 5))))
-            strength = json_data.get("strength", strength)
-            area = json_data.get("area_to_improve", area)
-        else:
-            score = _heuristic_score(answer)
-
-        return {
-            "score": score,
-            "feedback": feedback,
-            "strength": strength,
-            "area_to_improve": area
-        }
-
-    except Exception as e:
-        print(f"[ai_engine] evaluate_answer error: {e}")
+        clean = raw.strip().lstrip("```json").rstrip("```").strip()
+        return json.loads(clean)
+    except Exception:
         return {
             "score": 5,
-            "feedback": _fallback_feedback(answer),
-            "strength": "Answer provided",
-            "area_to_improve": "Try to include specific examples and outcomes"
+            "strengths": "Answer provided",
+            "improvements": raw or "Could not evaluate",
+            "verdict": "Average",
         }
 
 
-def _fallback_feedback(answer):
-    answer_lower = answer.lower()
-    if any(w in answer_lower for w in ["challenge", "difficult", "problem"]):
-        return "I can see you've dealt with some tough situations. How did that turn out in the end?"
-    elif any(w in answer_lower for w in ["team", "collaborate", "worked with"]):
-        return "Okay, sounds like teamwork was key there. Good."
-    elif len(answer.split()) < 30:
-        return "Alright, I'd love a bit more detail on that if you have it."
-    else:
-        return "Got it, thanks for walking me through that."
+def generate_mcq_questions(role: str, n: int = 10) -> list:
+    """Generate MCQ questions for a given role using AI."""
+    prompt = f"""You are a technical recruiter creating {n} multiple-choice screening questions for a {role} position in 2026.
+Use LATEST industry standards, best practices, and current technologies. Focus on modern approaches and frameworks.
+
+Generate EXACTLY {n} questions in valid JSON array format. Each question MUST have these exact fields:
+- "q": the question text (string)
+- "options": exactly 4 answer options (array of strings) - list CORRECT answer FIRST
+- "answer": the index 0-3 of the correct answer (integer) - make sure it points to the LATEST CORRECT answer
+
+IMPORTANT: The correct answer should reflect CURRENT best practices (2026), not outdated information.
+
+Example format:
+[
+  {{"q": "Question 1?", "options": ["opt1_CORRECT", "opt2_old", "opt3", "opt4"], "answer": 0}},
+  {{"q": "Question 2?", "options": ["opt1_CORRECT", "opt2", "opt3_old", "opt4"], "answer": 0}}
+]
+
+Return ONLY the JSON array, no markdown, no text before or after."""
+    
+    raw = _ollama(prompt)
+    try:
+        # Try to extract JSON from the response
+        clean = raw.strip()
+        
+        # Remove markdown code blocks if present
+        if "```" in clean:
+            parts = clean.split("```")
+            for part in parts:
+                if part.strip().startswith("["):
+                    clean = part.strip()
+                    break
+        
+        # Remove leading/trailing whitespace and markers
+        if clean.startswith("json"):
+            clean = clean[4:].strip()
+        if clean.startswith("["):
+            # Find the first [ and last ]
+            start = clean.find("[")
+            end = clean.rfind("]")
+            if start >= 0 and end > start:
+                clean = clean[start:end+1]
+        
+        questions = json.loads(clean)
+        
+        # Validate structure
+        validated = []
+        for q in questions:
+            if isinstance(q, dict):
+                # Try to get required fields
+                q_text = q.get("q") or q.get("question")
+                options = q.get("options")
+                answer = q.get("answer")
+                
+                if q_text and options and answer is not None:
+                    if isinstance(options, list) and len(options) == 4:
+                        if isinstance(answer, int) and 0 <= answer < 4:
+                            validated.append({
+                                "q": q_text,
+                                "options": options,
+                                "answer": answer
+                            })
+        
+        # Return validated questions
+        if validated:
+            return validated[:n]
+        
+        logger.warning(f"MCQ validation failed for {role}, got {len(questions)} questions but none validated")
+        return []
+    except json.JSONDecodeError as e:
+        logger.error(f"MCQ JSON decode error for {role}: {e}\nRaw response: {raw[:200]}")
+        return []
+    except Exception as e:
+        logger.error(f"MCQ generation error for {role}: {e}")
+        return []
 
 
-def _heuristic_score(answer):
-    score = 4
-    a = answer.lower()
-    if re.search(r'\d+%|\d+\s*(users|months|years|days|hours|engineers|projects)', a):
-        score += 2
-    if any(w in a for w in ["result", "achieved", "delivered", "outcome", "impact"]):
-        score += 1.5
-    if any(w in a for w in ["challenge", "problem", "obstacle"]):
-        score += 1
-    if any(w in a for w in ["learned", "improved", "realized"]):
-        score += 0.5
-    if len(answer.split()) > 100:
-        score += 0.5
-    return round(min(10, score), 1)
+def generate_coding_questions(role: str, n: int = 2) -> list:
+    """Generate coding challenge questions for a given role using AI."""
+    prompt = f"""You are a technical interviewer creating {n} coding challenges for a {role} position in 2026.
+Use LATEST technologies, frameworks, and best practices. Focus on real-world relevance and modern approaches.
+
+Generate EXACTLY {n} challenges in valid JSON array format. Each challenge MUST have:
+- "id": unique identifier (string, snake_case)
+- "func": function name to implement (string)
+- "title": challenge title (string)
+- "difficulty": "Easy" or "Medium" (string)
+- "description": problem description with example using LATEST practices (string, can include newlines)
+- "starter": Python function stub starting with def (string)
+- "test_cases": array of objects with "input" (tuple) and "expected" (expected result)
+
+Example:
+[
+  {{
+    "id": "two_sum",
+    "func": "two_sum",
+    "title": "Two Sum Problem",
+    "difficulty": "Easy",
+    "description": "Find two numbers that add to target.",
+    "starter": "def two_sum(nums, target):\\n    pass",
+    "test_cases": [
+      {{"input": ([1, 2, 3], 5), "expected": [1, 2]}},
+      {{"input": ([1, 2], 3), "expected": [0, 1]}}
+    ]
+  }}
+]
+
+Return ONLY the JSON array, no markdown, no explanation."""
+    
+    raw = _ollama(prompt)
+    try:
+        # Try to extract JSON from the response
+        clean = raw.strip()
+        
+        # Remove markdown code blocks if present
+        if "```" in clean:
+            parts = clean.split("```")
+            for part in parts:
+                if part.strip().startswith("["):
+                    clean = part.strip()
+                    break
+        
+        # Remove leading markers
+        if clean.startswith("json"):
+            clean = clean[4:].strip()
+        
+        if clean.startswith("["):
+            # Find the first [ and last ]
+            start = clean.find("[")
+            end = clean.rfind("]")
+            if start >= 0 and end > start:
+                clean = clean[start:end+1]
+        
+        questions = json.loads(clean)
+        
+        # Validate structure
+        validated = []
+        for q in questions:
+            if isinstance(q, dict):
+                required_fields = ["id", "func", "title", "difficulty", "description", "starter", "test_cases"]
+                if all(field in q for field in required_fields):
+                    if isinstance(q.get("test_cases"), list) and len(q["test_cases"]) >= 2:
+                        validated.append({
+                            "id": str(q["id"]),
+                            "func": str(q["func"]),
+                            "title": str(q["title"]),
+                            "difficulty": str(q["difficulty"]),
+                            "description": str(q["description"]),
+                            "starter": str(q["starter"]),
+                            "test_cases": q["test_cases"]
+                        })
+        
+        # Return validated questions
+        if validated:
+            return validated[:n]
+        
+        logger.warning(f"Coding validation failed for {role}, got {len(questions)} questions but none validated")
+        return []
+    except json.JSONDecodeError as e:
+        logger.error(f"Coding JSON decode error for {role}: {e}\nRaw response: {raw[:200]}")
+        return []
+    except Exception as e:
+        logger.error(f"Coding generation error for {role}: {e}")
+        return []

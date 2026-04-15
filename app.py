@@ -1,4 +1,4 @@
-from flask import Flask, redirect, request, render_template, session, url_for
+from flask import Flask, redirect, request, render_template, session, url_for, flash
 import requests
 import sqlite3
 import os
@@ -23,6 +23,8 @@ app.jinja_env.filters['enumerate'] = enumerate
 def init_db():
     conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
+    
+    # Create users table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,6 +33,8 @@ def init_db():
         password TEXT
     )
     """)
+    
+    # Create screening_results table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS screening_results (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,8 +46,50 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    
+    # Create saved_jobs table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS saved_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT,
+        job_id TEXT,
+        title TEXT,
+        company TEXT,
+        location TEXT,
+        url TEXT,
+        saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(email, job_id)
+    )
+    """)
+    
+    # Ensure saved_jobs table has email column (migration for existing databases)
+    try:
+        cursor.execute("SELECT email FROM saved_jobs LIMIT 1")
+    except sqlite3.OperationalError:
+        print("Migration: Adding email column to saved_jobs if missing...")
+        try:
+            cursor.execute("ALTER TABLE saved_jobs ADD COLUMN email TEXT")
+        except:
+            pass  # Column might already exist
+    
+    # Create cover_letters table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS cover_letters (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT,
+        name TEXT,
+        role TEXT,
+        company TEXT,
+        job_desc TEXT,
+        resume_text TEXT,
+        letter TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    
     conn.commit()
     conn.close()
+    print("✅ Database initialized successfully")
 
 init_db()
 
@@ -128,6 +174,12 @@ def callback():
 def home():
     return render_template("index.html", user=session.get("user"))
 
+@app.route("/dashboard")
+def dashboard():
+    if "user" not in session:
+        return redirect(url_for("google_login"))
+    return render_template("dashboard.html", user=session.get("user"))
+
 @app.route("/logout")
 def logout():
     session.clear()
@@ -183,6 +235,18 @@ def start():
         return render_template("video.html", question=first_q)
     return render_template("interview.html", messages=session["messages"])
 
+
+@app.route("/interview", methods=["GET", "POST"])
+def interview():
+    """Handle interview page and form submission"""
+    if request.method == "POST":
+        return submit()
+    if "user" not in session:
+        return redirect(url_for("google_login"))
+    messages = session.get("messages", [])
+    if not messages:
+        return redirect(url_for("start"))
+    return render_template("interview.html", messages=messages)
 
 @app.route("/submit", methods=["POST"])
 def submit():
@@ -291,11 +355,53 @@ def submit():
 def resume_suite():
     if "user" not in session:
         return redirect(url_for("google_login"))
-    return render_template("resume_suite.html")
+    # Redirect to template selection first
+    return redirect(url_for("resume_templates"))
+
+# ================= RESUME TEMPLATES =================
+RESUME_TEMPLATES = {
+    "classic": {
+        "name": "Classic",
+        "description": "Traditional, clean design. Perfect for formal industries.",
+        "icon": "📄"
+    },
+    "modern": {
+        "name": "Modern",
+        "description": "Sleek and contemporary. Great for tech and creative roles.",
+        "icon": "✨"
+    },
+    "professional": {
+        "name": "Professional",
+        "description": "Corporate style. Ideal for executive and business roles.",
+        "icon": "💼"
+    },
+    "compact": {
+        "name": "Compact",
+        "description": "Space-efficient design. Fit more content on one page.",
+        "icon": "📋"
+    },
+    "creative": {
+        "name": "Creative",
+        "description": "Colorful and bold. Perfect for designers and creatives.",
+        "icon": "🎨"
+    }
+}
+
+@app.route("/resume_templates")
+def resume_templates():
+    """Show available resume templates"""
+    if "user" not in session:
+        return redirect(url_for("google_login"))
+    return render_template("resume_templates.html", templates=RESUME_TEMPLATES)
 
 # ================= RESUME BUILDER =================
 @app.route("/resume", methods=["GET", "POST"])
 def resume():
+    template = request.args.get("template", "classic")
+    
+    if template not in RESUME_TEMPLATES:
+        template = "classic"
+    
     if request.method == "POST":
         skills = [s.strip() for s in request.form.getlist("skills[]") if s.strip()]
         experience = [e.strip() for e in request.form.getlist("experience[]") if e.strip()]
@@ -309,15 +415,16 @@ def resume():
             "about": request.form.get("about", "").strip(),
             "education": request.form.get("education", "").strip(),
             "experience": experience,
-            "skills": skills
+            "skills": skills,
+            "template": template
         }
 
         if not data["name"] or not data["email"]:
-            return render_template("resume.html", data=data, error="Name & Email required ❌")
+            return render_template("resume.html", data=data, error="Name & Email required ❌", template=template, template_name=RESUME_TEMPLATES[template]["name"])
 
-        return render_template("resume.html", data=data, success="Resume Generated ✅")
+        return render_template("resume.html", data=data, success="Resume Generated ✅", template=template, template_name=RESUME_TEMPLATES[template]["name"])
 
-    return render_template("resume.html", data={"skills": [], "experience": []})
+    return render_template("resume.html", data={"skills": [], "experience": [], "template": template}, template=template, template_name=RESUME_TEMPLATES[template]["name"])
 
 # ================= ANALYZER =================
 @app.route("/analyze", methods=["POST"])
@@ -379,6 +486,8 @@ def ats():
             return render_template("ats.html", error="❌ No file uploaded")
         if not job_desc:
             return render_template("ats.html", error="❌ Job description required")
+        if len(job_desc) < 50:
+            return render_template("ats.html", error="❌ Job description too short (minimum 50 characters). Provide full details for accurate ATS analysis.")
 
         resume_text = ""
         filename = file.filename.lower()
@@ -642,8 +751,159 @@ def search_adzuna_jobs(country_code: str, query: str, location: str = "", page: 
 
     response = requests.get(url, params=params, timeout=15)
     response.raise_for_status()
-    return response.json().get("results", [])
+    results = response.json().get("results", [])
+    
+    # Map ADZUNA response fields to template expectations
+    for job in results:
+        # Rename redirect_url to url for template compatibility
+        if "redirect_url" in job and "url" not in job:
+            job["url"] = job["redirect_url"]
+        
+        # Extract company display_name
+        if isinstance(job.get("company"), dict) and "display_name" in job["company"]:
+            job["company"] = job["company"]["display_name"]
+        
+        # Extract location display_name
+        if isinstance(job.get("location"), dict) and "display_name" in job["location"]:
+            job["location"] = job["location"]["display_name"]
+        
+        # Extract salary if available
+        if "salary_max" in job and job["salary_max"]:
+            job["salary"] = job["salary_max"]
+        elif "salary_min" in job and job["salary_min"]:
+            job["salary"] = job["salary_min"]
+    
+    return results
 
+
+# ================= SAVED JOBS =================
+@app.route("/saved_jobs")
+@login_required
+def saved_jobs():
+    email = session.get("email")
+    if not email:
+        return redirect(url_for("google_login"))
+    
+    try:
+        conn = sqlite3.connect("users.db")
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM saved_jobs WHERE email=? ORDER BY saved_at DESC", (email,))
+        jobs = [dict(job) for job in cursor.fetchall()]
+        # Ensure job_id is treated as string for consistency
+        for job in jobs:
+            job['job_id'] = str(job['job_id'])
+        conn.close()
+    except sqlite3.OperationalError as e:
+        print(f"Database error in saved_jobs: {e}")
+        jobs = []
+    
+    return render_template("saved_jobs.html", jobs=jobs)
+
+@app.route("/api/save_job", methods=["POST"])
+def api_save_job():
+    """API endpoint to save or remove a job"""
+    if "email" not in session:
+        return {"status": "error", "message": "Not logged in"}, 401
+    
+    try:
+        data = request.get_json()
+        job_id = data.get("job_id")
+        action = data.get("action")  # 'save' or 'unsave'
+        email = session.get("email")
+        
+        if not job_id:
+            return {"status": "error", "message": "Missing job_id"}, 400
+        
+        conn = sqlite3.connect("users.db")
+        cursor = conn.cursor()
+        
+        try:
+            if action == "save":
+                # Insert or ignore if already saved
+                cursor.execute(
+                    """INSERT OR IGNORE INTO saved_jobs 
+                       (email, job_id, title, company, location, url) 
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (email, job_id, data.get("title", ""), data.get("company", ""),
+                     data.get("location", ""), data.get("url", ""))
+                )
+            elif action == "unsave":
+                cursor.execute(
+                    "DELETE FROM saved_jobs WHERE email=? AND job_id=?",
+                    (email, job_id)
+                )
+            conn.commit()
+            return {"status": "ok", "message": f"Job {action}d successfully"}
+        except sqlite3.OperationalError as e:
+            print(f"Database error in api_save_job: {e}")
+            # Table might not exist, try to create it
+            try:
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS saved_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT,
+                    job_id TEXT,
+                    title TEXT,
+                    company TEXT,
+                    location TEXT,
+                    url TEXT,
+                    saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(email, job_id)
+                )
+                """)
+                conn.commit()
+                return {"status": "error", "message": "Database table created. Please try again."}, 500
+            except Exception as create_err:
+                return {"status": "error", "message": str(create_err)}, 500
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"Error in api_save_job: {e}")
+        return {"status": "error", "message": str(e)}, 500
+
+# ================= SKILLS GAP ANALYSIS =================
+@app.route("/skills", methods=["GET", "POST"])
+@login_required
+def skills():
+    """Skill gap analysis page"""
+    if request.method == "POST":
+        role = request.form.get("role", "").strip()
+        user_skills = request.form.get("user_skills", "").strip()
+        
+        if not role or not user_skills:
+            return render_template("skills.html", roles=["Python Developer", "Data Scientist", "DevOps Engineer", "Full Stack Developer", "Frontend Developer", "Backend Developer", "Mobile Developer", "QA Engineer", "Cloud Architect", "Machine Learning Engineer"], gap_result=None)
+        
+        # Skills required for different roles (predefined mapping)
+        role_skills_map = {
+            "Python Developer": ["Python", "Django", "FastAPI", "SQL", "Git", "Docker", "REST APIs", "Unit Testing"],
+            "Data Scientist": ["Python", "Pandas", "NumPy", "Scikit-learn", "TensorFlow", "SQL", "Statistics", "Matplotlib"],
+            "DevOps Engineer": ["Docker", "Kubernetes", "Jenkins", "Git", "Linux", "AWS", "Terraform", "CI/CD"],
+            "Full Stack Developer": ["JavaScript", "React", "Node.js", "MongoDB", "SQL", "HTML", "CSS", "Git"],
+            "Frontend Developer": ["JavaScript", "React", "Vue.js", "CSS", "HTML", "Webpack", "Git", "UI/UX"],
+            "Backend Developer": ["Node.js", "Python", "Java", "SQL", "APIs", "Docker", "Git", "Database Design"],
+            "Mobile Developer": ["React Native", "Flutter", "Swift", "Kotlin", "Firebase", "Git", "REST APIs", "Mobile UI"],
+            "QA Engineer": ["Selenium", "Jest", "Cypress", "Manual Testing", "SQL", "Git", "JIRA", "Test Planning"],
+            "Cloud Architect": ["AWS", "Azure", "GCP", "Docker", "Kubernetes", "Terraform", "Networking", "Security"],
+            "Machine Learning Engineer": ["Python", "TensorFlow", "PyTorch", "Scikit-learn", "SQL", "Statistics", "Git", "Data Analysis"],
+        }
+        
+        required = role_skills_map.get(role, [])
+        user_skills_list = [s.strip() for s in user_skills.split(",")]
+        matched = [s for s in required if any(req.lower() in s.lower() or s.lower() in req.lower() for req in user_skills_list)]
+        missing = [s for s in required if s not in matched]
+        match_pct = int(len(matched) / len(required) * 100) if required else 0
+        
+        gap_result = {
+            "role": role,
+            "required": required,
+            "matched": matched,
+            "missing": missing,
+            "match_pct": match_pct
+        }
+        return render_template("skills.html", roles=["Python Developer", "Data Scientist", "DevOps Engineer", "Full Stack Developer", "Frontend Developer", "Backend Developer", "Mobile Developer", "QA Engineer", "Cloud Architect", "Machine Learning Engineer"], gap_result=gap_result, prefill_skills=user_skills)
+    
+    return render_template("skills.html", roles=["Python Developer", "Data Scientist", "DevOps Engineer", "Full Stack Developer", "Frontend Developer", "Backend Developer", "Mobile Developer", "QA Engineer", "Cloud Architect", "Machine Learning Engineer"], gap_result=None, prefill_skills="")
 
 # ================= JOB RESULT =================
 @app.route("/job_result", methods=["GET", "POST"])
@@ -702,15 +962,132 @@ def job_result():
     session.pop("job_location", None)
     session.pop("job_types", None)
 
+    # Add saved status to each job
+    email = session.get("email")
+    if email:
+        try:
+            conn = sqlite3.connect("users.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT job_id FROM saved_jobs WHERE email=?", (email,))
+            saved_job_ids = {str(row[0]) for row in cursor.fetchall()}
+            conn.close()
+            for job in jobs:
+                job["saved"] = str(job.get("id", "")) in saved_job_ids
+        except sqlite3.OperationalError as db_error:
+            print(f"Database error in job_result: {db_error}")
+            # Mark all jobs as not saved if table doesn't exist
+            for job in jobs:
+                job["saved"] = False
+    else:
+        for job in jobs:
+            job["saved"] = False
+    
+    # Create job saves dict for template
+    job_saves = {job.get("id", ""): job.get("saved", False) for job in jobs}
+    
     return render_template(
         "job_result.html",
         jobs=jobs,
+        jobs_saves=job_saves,
         skills=skills,
         role=role,
         location=location,
         job_types=job_types,
         error_msg=error_msg,
     )
+
+# ================= COVER LETTER =================
+@app.route("/cover_letter", methods=["GET", "POST"])
+@login_required
+def cover_letter():
+    email = session.get("email")
+    if not email:
+        return redirect(url_for("google_login"))
+    
+    letter = None
+    saved = []
+    
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        role = request.form.get("role", "").strip()
+        company = request.form.get("company", "").strip()
+        job_desc = request.form.get("job_desc", "").strip()
+        resume_text = request.form.get("resume_text", "").strip()
+        
+        if not name or not role or not company:
+            flash("❌ Name, role, and company are required", "error")
+            return render_template("cover_letter.html", letter=None, saved=[])
+        
+        if not job_desc:
+            flash("❌ Job description is required", "error")
+            return render_template("cover_letter.html", letter=None, saved=[])
+        
+        try:
+            # Generate cover letter using AI
+            prompt = f"""Write a professional cover letter for:
+- Name: {name}
+- Role: {role}
+- Company: {company}
+- Key job requirements: {job_desc}
+{f'- My experience: {resume_text}' if resume_text else ''}
+
+Write a compelling, personalized 3-4 paragraph cover letter. No salutation/date needed, just the body."""
+            
+            # Call Ollama AI
+            response = requests.post(
+                f"{OLLAMA_URL}/api/generate",
+                json={"model": "llama3:latest", "prompt": prompt, "stream": False},
+                timeout=60,
+            )
+            response.raise_for_status()
+            letter = response.json().get("response", "").strip()
+            
+            if not letter:
+                flash("❌ AI failed to generate letter. Try again.", "error")
+                return render_template("cover_letter.html", letter=None, saved=[])
+            
+            # Save to database
+            try:
+                conn = sqlite3.connect("users.db")
+                cursor = conn.cursor()
+                cursor.execute(
+                    """INSERT INTO cover_letters (email, name, role, company, job_desc, resume_text, letter)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (email, name, role, company, job_desc, resume_text, letter)
+                )
+                conn.commit()
+                conn.close()
+                flash("✅ Cover letter saved!", "success")
+            except sqlite3.OperationalError as e:
+                print(f"Database error in cover_letter: {e}")
+                # Table might not exist, but letter is still generated
+                flash("⚠️ Letter generated but not saved", "warning")
+        
+        except requests.exceptions.Timeout:
+            flash("❌ AI request timed out. Check if Ollama is running.", "error")
+        except requests.exceptions.ConnectionError:
+            flash("❌ Cannot connect to AI service. Check Ollama is running.", "error")
+        except Exception as e:
+            print(f"Error in cover_letter generation: {e}")
+            flash(f"❌ Error: {str(e)}", "error")
+    
+    # Load saved letters
+    try:
+        conn = sqlite3.connect("users.db")
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT id, name, role, company, created_at FROM cover_letters 
+               WHERE email=? ORDER BY created_at DESC LIMIT 10""",
+            (email,)
+        )
+        saved = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+    except sqlite3.OperationalError as e:
+        print(f"Database error loading saved letters: {e}")
+        saved = []
+    
+    return render_template("cover_letter.html", letter=letter, saved=saved)
 
 # ================= RUN =================
 if __name__ == "__main__":

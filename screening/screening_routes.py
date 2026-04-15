@@ -1,5 +1,6 @@
 from flask import Blueprint, render_template, request, session, redirect, url_for
 import time, random
+from utils.ai_engine import generate_mcq_questions, generate_coding_questions
 
 screening_bp = Blueprint("screening", __name__)
 
@@ -678,8 +679,16 @@ def level1():
     session["screening_stage"] = 1
     session["mcq_start"] = time.time()
 
-    questions = _pick_mcq(role, n=10)
-    session["mcq_questions"] = questions
+    # Generate MCQ questions using AI - ALWAYS use latest, never use outdated pools
+    questions = generate_mcq_questions(role, n=10)
+    
+    # Retry if first attempt fails
+    retry = 0
+    while not questions and retry < 2:
+        questions = generate_mcq_questions(role, n=10)
+        retry += 1
+    
+    session["mcq_questions"] = questions if questions else []
 
     return render_template("screening/level1.html",
                            questions=questions, duration=MCQ_DURATION, role=role)
@@ -738,8 +747,17 @@ def level2():
 
     role = session.get("pending_role", "Software Engineer")
     session["code_start"] = time.time()
-    questions = _pick_coding(role, n=2)
-    session["coding_questions"] = questions
+    
+    # Generate coding questions using AI - ALWAYS use latest, never use outdated pools
+    questions = generate_coding_questions(role, n=2)
+    
+    # Retry if first attempt fails
+    retry = 0
+    while not questions and retry < 2:
+        questions = generate_coding_questions(role, n=2)
+        retry += 1
+    
+    session["coding_questions"] = questions if questions else []
 
     return render_template("screening/level2.html",
                            questions=questions, duration=CODE_DURATION, role=role)

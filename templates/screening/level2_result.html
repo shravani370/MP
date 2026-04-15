@@ -85,7 +85,7 @@ body{font-family:'Sora',sans-serif;min-height:100vh;background:var(--cream);colo
   <div class="q-result">
     <div class="q-result-header">
       <div class="q-result-title">{{ r.title }}</div>
-      <span style="font-size:12px;font-weight:700;color:{{ '#16a34a' if r.result.passed == r.result.total else '#dc2626' }}">
+      <span class="q-result-status" data-passed="{{ r.result.passed }}" data-total="{{ r.result.total }}">
         {{ r.result.passed }}/{{ r.result.total }} tests passed
       </span>
     </div>
@@ -116,5 +116,17 @@ body{font-family:'Sora',sans-serif;min-height:100vh;background:var(--cream);colo
     {% endif %}
   </div>
 </div>
+<script>
+  // Apply styling to result status spans based on test results
+  document.querySelectorAll('.q-result-status').forEach(el => {
+    const passed = parseInt(el.dataset.passed);
+    const total = parseInt(el.dataset.total);
+    if (passed === total) {
+      el.style.cssText = 'font-size:12px;font-weight:700;color:#16a34a;';
+    } else {
+      el.style.cssText = 'font-size:12px;font-weight:700;color:#dc2626;';
+    }
+  });
+</script>
 </body>
 </html>
