@@ -1,6 +1,7 @@
 from flask import Flask, redirect, request, render_template, session, url_for, flash, jsonify
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import requests
-import sqlite3
 import os
 import tempfile
 from dotenv import load_dotenv
@@ -10,6 +11,10 @@ from PyPDF2 import PdfReader
 from docx import Document
 from functools import wraps
 import json
+from sqlalchemy import select
+from models.db import db, User, ScreeningResult, SavedJob, CoverLetter
+from flask_mail import Mail
+from celery_app import app as celery_app
 
 # ================= ENV =================
 load_dotenv()
@@ -17,8 +22,64 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "dev_key_change_in_production")
 
+# Configure SQLAlchemy
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv(
+    'DATABASE_URL',
+    'postgresql://localhost/interview_proai'
+)
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_size': 10,
+    'pool_recycle': 3600,
+    'pool_pre_ping': True,
+}
+db.init_app(app)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# REDIS CONFIGURATION (Sessions + Caching)
+# ═══════════════════════════════════════════════════════════════════════════
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+app.config.update(
+    SESSION_TYPE='redis',
+    SESSION_REDIS=REDIS_URL,
+    SESSION_COOKIE_SECURE=os.getenv('SECURE_COOKIES', 'False').lower() in ('true', '1', 'yes'),
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=24 * 3600,  # 24 hours
+)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# EMAIL CONFIGURATION (Flask-Mail)
+# ═══════════════════════════════════════════════════════════════════════════
+app.config.update(
+    MAIL_SERVER=os.getenv('MAIL_SERVER', 'localhost'),
+    MAIL_PORT=int(os.getenv('MAIL_PORT', 25)),
+    MAIL_USE_TLS=os.getenv('MAIL_USE_TLS', 'False').lower() in ('true', '1'),
+    MAIL_USE_SSL=os.getenv('MAIL_USE_SSL', 'False').lower() in ('true', '1'),
+    MAIL_USERNAME=os.getenv('MAIL_USERNAME', ''),
+    MAIL_PASSWORD=os.getenv('MAIL_PASSWORD', ''),
+    MAIL_DEFAULT_SENDER=os.getenv('MAIL_DEFAULT_SENDER', 'noreply@interview-proai.com')
+)
+mail = Mail(app)
+
+# Initialize Celery with Flask app context
+celery_app.conf.update(app.config)
+
+@celery_app.task(bind=True)
+def debug_task(self):
+    print(f'Celery request: {self.request!r}')
+
 # Setup secure session configuration
 setup_secure_session(app)
+
+# Setup rate limiting
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://"
+)
 
 # ── Enumerate filter for Jinja2 (used by screening templates) ──
 app.jinja_env.filters['enumerate'] = enumerate
@@ -31,100 +92,19 @@ def inject_csrf_token():
         csrf_token = generate_csrf_token()
     return {"csrf_token": csrf_token}
 
-# ================= DB =================
-def init_db():
-    conn = sqlite3.connect("users.db")
-    cursor = conn.cursor()
-    
-    # Create users table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        email TEXT UNIQUE,
-        password TEXT,
-        auth_type TEXT DEFAULT 'email',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-    
-    # Database migrations
-    try:
-        cursor.execute("SELECT auth_type FROM users LIMIT 1")
-    except sqlite3.OperationalError:
-        print("Migration: Adding auth_type column to users...")
-        try:
-            cursor.execute("ALTER TABLE users ADD COLUMN auth_type TEXT DEFAULT 'email'")
-        except:
-            pass
-    
-    try:
-        cursor.execute("SELECT created_at FROM users LIMIT 1")
-    except sqlite3.OperationalError:
-        print("Migration: Adding created_at column to users...")
-        try:
-            cursor.execute("ALTER TABLE users ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
-        except:
-            pass
-    
-    # Create screening_results table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS screening_results (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        email TEXT,
-        role TEXT,
-        mcq_score INTEGER,
-        code_score INTEGER,
-        passed INTEGER,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-    
-    # Create saved_jobs table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS saved_jobs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        email TEXT,
-        job_id TEXT,
-        title TEXT,
-        company TEXT,
-        location TEXT,
-        url TEXT,
-        saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(email, job_id)
-    )
-    """)
-    
-    # Ensure saved_jobs table has email column (migration for existing databases)
-    try:
-        cursor.execute("SELECT email FROM saved_jobs LIMIT 1")
-    except sqlite3.OperationalError:
-        print("Migration: Adding email column to saved_jobs if missing...")
-        try:
-            cursor.execute("ALTER TABLE saved_jobs ADD COLUMN email TEXT")
-        except:
-            pass  # Column might already exist
-    
-    # Create cover_letters table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS cover_letters (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        email TEXT,
-        name TEXT,
-        role TEXT,
-        company TEXT,
-        job_desc TEXT,
-        resume_text TEXT,
-        letter TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-    
-    conn.commit()
-    conn.close()
-    print("✅ Database initialized successfully")
+# ═══════════════════════════════════════════════════════════════════════════
+# DATABASE INITIALIZATION (use Alembic migrations in production)
+# ═══════════════════════════════════════════════════════════════════════════
+def init_db_with_app():
+    """Initialize database tables (development only - use alembic in production)"""
+    with app.app_context():
+        db.create_all()
+        print("✅ Database tables created/verified")
 
-init_db()
+# Initialize DB on app start (ensures tables exist for development)
+with app.app_context():
+    db.create_all()
+
 
 # ================= SCREENING BLUEPRINT =================
 from screening.screening_routes import screening_bp
@@ -183,16 +163,17 @@ def callback():
         name = user_info.get("name")
         email = user_info.get("email")
 
-        conn = sqlite3.connect("users.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE email=?", (email,))
-        if not cursor.fetchone():
-            cursor.execute(
-                "INSERT INTO users (name, email, password, auth_type) VALUES (?, ?, ?, ?)",
-                (name, email, "google_auth", "google")
+        # Check if user exists, create if not
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            user = User(
+                name=name,
+                email=email,
+                password="google_auth",
+                auth_type="google"
             )
-            conn.commit()
-        conn.close()
+            db.session.add(user)
+            db.session.commit()
 
         set_secure_session(name, email)
         return redirect("/")
@@ -209,7 +190,64 @@ def home():
 def dashboard():
     if "user" not in session:
         return redirect(url_for("google_login"))
-    return render_template("dashboard.html", user=session.get("user"))
+    
+    email = session.get("email")
+    user_name = session.get("user")
+    
+    # Fetch dashboard data
+    try:
+        # Get user from database
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            flash("❌ User not found", "error")
+            return redirect(url_for("google_login"))
+        
+        # Get recent screening results (last 10)
+        recent_results = db.session.query(ScreeningResult).filter_by(
+            user_id=user.id
+        ).order_by(ScreeningResult.created_at.desc()).limit(10).all()
+        
+        # Calculate statistics
+        all_results = db.session.query(ScreeningResult).filter_by(user_id=user.id).all()
+        total_attempts = len(all_results)
+        passed_count = sum(1 for r in all_results if r.passed)
+        
+        if all_results:
+            avg_score = sum((r.mcq_score and r.code_score and (r.mcq_score + r.code_score) / 2.0) or 0 
+                           for r in all_results) / total_attempts if total_attempts > 0 else 0
+            avg_score = round(avg_score, 2)
+        else:
+            avg_score = 0
+        
+        # Get saved jobs count
+        saved_jobs_count = db.session.query(SavedJob).filter_by(user_id=user.id).count()
+        
+        # Format screening results for template
+        screening_results = [
+            {
+                'role': r.role,
+                'mcq_score': r.mcq_score,
+                'code_score': r.code_score,
+                'passed': r.passed,
+                'created_at': r.created_at
+            }
+            for r in recent_results
+        ]
+        
+        dashboard_data = {
+            "user": user_name,
+            "email": email,
+            "total_attempts": total_attempts,
+            "avg_score": avg_score,
+            "passed_count": passed_count,
+            "recent_screenings": screening_results,
+            "saved_jobs": saved_jobs_count
+        }
+        
+        return render_template("dashboard.html", **dashboard_data)
+    except Exception as e:
+        flash(f"Error loading dashboard: {e}", "error")
+        return render_template("dashboard.html", user=user_name, error=str(e))
 
 @app.route("/logout")
 def logout():
@@ -218,6 +256,7 @@ def logout():
 
 # ================= LOGIN / SIGNUP / PROFILE =================
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("5 per minute")
 def login():
     if request.method == "POST":
         email = request.form.get("email", "").strip()
@@ -235,23 +274,19 @@ def login():
             return render_template("login.html", csrf_token=generate_csrf_token())
         
         try:
-            conn = sqlite3.connect("users.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT name, email, password FROM users WHERE email=? AND auth_type=?", (email, "email"))
-            user = cursor.fetchone()
-            conn.close()
+            # Fetch user from database
+            user = User.query.filter_by(email=email, auth_type='email').first()
             
             if not user:
                 flash("❌ Invalid email or password", "error")
                 return render_template("login.html", csrf_token=generate_csrf_token())
             
-            name, stored_email, password_hash = user
-            if not verify_password(password, password_hash):
+            if not verify_password(password, user.password):
                 flash("❌ Invalid email or password", "error")
                 return render_template("login.html", csrf_token=generate_csrf_token())
             
             # Successful login
-            set_secure_session(name, email)
+            set_secure_session(user.name, email)
             flash("✅ Logged in successfully!", "success")
             return redirect("/")
         
@@ -264,6 +299,7 @@ def login():
 
 
 @app.route("/signup", methods=["GET", "POST"])
+@limiter.limit("10 per hour")
 def signup():
     if request.method == "POST":
         name = request.form.get("name", "").strip()
@@ -297,34 +333,30 @@ def signup():
             return render_template("signup.html", csrf_token=generate_csrf_token())
         
         try:
-            conn = sqlite3.connect("users.db")
-            cursor = conn.cursor()
-            
             # Check if email already exists
-            cursor.execute("SELECT email FROM users WHERE email=?", (email,))
-            if cursor.fetchone():
-                conn.close()
+            existing_user = User.query.filter_by(email=email).first()
+            if existing_user:
                 flash("❌ Email already registered", "error")
                 return render_template("signup.html", csrf_token=generate_csrf_token())
             
-            # Hash password and insert
+            # Create new user
             password_hash = hash_password(password)
-            cursor.execute(
-                "INSERT INTO users (name, email, password, auth_type) VALUES (?, ?, ?, ?)",
-                (name, email, password_hash, "email")
+            new_user = User(
+                name=name,
+                email=email,
+                password=password_hash,
+                auth_type='email'
             )
-            conn.commit()
-            conn.close()
+            db.session.add(new_user)
+            db.session.commit()
             
             # Auto-login
             set_secure_session(name, email)
             flash("✅ Account created successfully!", "success")
             return redirect("/")
         
-        except sqlite3.IntegrityError:
-            flash("❌ Email already registered", "error")
-            return render_template("signup.html", csrf_token=generate_csrf_token())
         except Exception as e:
+            db.session.rollback()
             flash(f"❌ Signup error: {e}", "error")
             return render_template("signup.html", csrf_token=generate_csrf_token())
     
@@ -337,6 +369,9 @@ def profile():
     if "user" not in session:
         return redirect(url_for("google_login"))
     
+    email = session.get("email")
+    user_name = session.get("user")
+    
     if request.method == "POST":
         csrf_token = request.form.get("csrf_token")
         
@@ -347,7 +382,6 @@ def profile():
         
         # Handle profile update
         name = request.form.get("name", "").strip()
-        email = session.get("email")
         
         if not name:
             flash("❌ Name is required", "error")
@@ -365,14 +399,52 @@ def profile():
             session.modified = True
             
             flash("✅ Profile updated successfully!", "success")
-            return render_template("profile.html", user=name, csrf_token=generate_csrf_token())
+            return redirect(url_for("profile"))
         
         except Exception as e:
             flash(f"❌ Error updating profile: {e}", "error")
             return render_template("profile.html", csrf_token=generate_csrf_token())
     
-    # GET request
-    return render_template("profile.html", user=session.get("user"), csrf_token=generate_csrf_token())
+    # GET request - fetch user stats
+    try:
+        conn = sqlite3.connect("users.db")
+        cursor = conn.cursor()
+        
+        # Get interview statistics
+        cursor.execute("""
+            SELECT COUNT(*) as total_interviews,
+                   AVG((mcq_score + code_score) / 2.0) as avg_score
+            FROM screening_results 
+            WHERE email = ?
+        """, (email,))
+        stats = cursor.fetchone()
+        
+        # Get recent screenings
+        cursor.execute("""
+            SELECT role, mcq_score, code_score, passed, created_at 
+            FROM screening_results 
+            WHERE email = ? 
+            ORDER BY created_at DESC 
+            LIMIT 5
+        """, (email,))
+        recent_interviews = cursor.fetchall()
+        
+        conn.close()
+        
+        profile_data = {
+            "user": user_name,
+            "email": email,
+            "total_interviews": stats[0] if stats else 0,
+            "avg_score": round(stats[1], 2) if stats and stats[1] else 0,
+            "recent_interviews": recent_interviews,
+            "csrf_token": generate_csrf_token()
+        }
+        
+        return render_template("profile.html", **profile_data)
+    
+    except Exception as e:
+        flash(f"Error loading profile: {e}", "error")
+        return render_template("profile.html", user=user_name, csrf_token=generate_csrf_token())
 
 # ================= INTERVIEW =================
 @app.route("/start")
@@ -1067,12 +1139,22 @@ def skills():
         missing = [s for s in required if s not in matched]
         match_pct = int(len(matched) / len(required) * 100) if required else 0
         
+        # Generate learning resources for missing skills
+        resources = {}
+        for skill in missing:
+            skill_encoded = skill.replace(" ", "+")
+            resources[skill] = {
+                "coursera": f"https://www.coursera.org/search?query={skill_encoded}",
+                "youtube": f"https://www.youtube.com/results?search_query={skill_encoded}+tutorial"
+            }
+        
         gap_result = {
             "role": role,
             "required": required,
             "matched": matched,
             "missing": missing,
-            "match_pct": match_pct
+            "match_pct": match_pct,
+            "resources": resources
         }
         return render_template("skills.html", roles=["Python Developer", "Data Scientist", "DevOps Engineer", "Full Stack Developer", "Frontend Developer", "Backend Developer", "Mobile Developer", "QA Engineer", "Cloud Architect", "Machine Learning Engineer"], gap_result=gap_result, prefill_skills=user_skills)
     
@@ -1259,5 +1341,226 @@ Write a compelling, personalized 3-4 paragraph cover letter. No salutation/date 
     return render_template("cover_letter.html", letter=letter, saved=saved)
 
 # ================= RUN =================
+@app.route("/health")
+def health_check():
+    """Health check endpoint for monitoring and Docker"""
+    try:
+        # Check database connection
+        db.session.execute(select(1))
+        db_status = "🟢 OK"
+    except Exception as e:
+        db_status = f"🔴 ERROR: {str(e)}"
+    
+    return jsonify({
+        "status": "healthy" if "OK" in db_status else "unhealthy",
+        "database": db_status,
+        "version": "1.0.0"
+    }), 200 if "OK" in db_status else 503
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ASYNC TASK API ENDPOINTS (For frontend polling)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/task/<task_id>")
+def get_task_status(task_id):
+    """
+    Get status of an async task
+    
+    Response:
+    {
+      "task_id": "abc123",
+      "state": "PENDING|PROGRESS|SUCCESS|FAILURE",
+      "result": {...},
+      "error": "optional error message"
+    }
+    """
+    try:
+        result = celery_app.AsyncResult(task_id)
+        
+        response = {
+            "task_id": task_id,
+            "state": result.state,
+        }
+        
+        if result.state == 'SUCCESS':
+            response["result"] = result.result
+        elif result.state == 'FAILURE':
+            response["error"] = str(result.info)
+        elif result.state == 'PROGRESS':
+            response["progress"] = result.info.get('current', 0)
+            response["total"] = result.info.get('total', 100)
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/generate-question", methods=["POST"])
+@login_required
+def api_generate_question():
+    """
+    Submit async task to generate interview question
+    Returns task ID for polling
+    """
+    try:
+        from tasks.ai_tasks import generate_question_async
+        
+        data = request.get_json()
+        topic = data.get("topic", "General")
+        previous_answer = data.get("previous_answer", "")
+        history = data.get("history", [])
+        asked_questions = data.get("asked_questions", [])
+        
+        # Submit task
+        task = generate_question_async.delay(
+            topic=topic,
+            previous_answer=previous_answer,
+            history=history,
+            asked_questions=asked_questions
+        )
+        
+        return jsonify({
+            "task_id": task.id,
+            "status": "queued"
+        }), 202
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/evaluate-answer", methods=["POST"])
+@login_required
+def api_evaluate_answer():
+    """
+    Submit async task to evaluate answer
+    Returns task ID for polling
+    """
+    try:
+        from tasks.ai_tasks import evaluate_answer_async
+        
+        data = request.get_json()
+        question = data.get("question", "")
+        answer = data.get("answer", "")
+        
+        if not question or not answer:
+            return jsonify({"error": "Missing question or answer"}), 400
+        
+        # Submit task
+        task = evaluate_answer_async.delay(
+            question=question,
+            answer=answer
+        )
+        
+        return jsonify({
+            "task_id": task.id,
+            "status": "queued"
+        }), 202
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/parse-resume", methods=["POST"])
+@login_required
+def api_parse_resume():
+    """
+    Submit async task to parse resume
+    Returns task ID for polling
+    """
+    try:
+        from tasks.resume_tasks import parse_resume_async
+        
+        email = session.get("email")
+        file = request.files.get("resume")
+        
+        if not file:
+            return jsonify({"error": "No file provided"}), 400
+        
+        # Save file temporarily
+        import tempfile
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf' if file.filename.endswith('.pdf') else '.docx')
+        file.save(tmp_file.name)
+        
+        # Submit task
+        task = parse_resume_async.delay(
+            file_path=tmp_file.name,
+            user_email=email
+        )
+        
+        return jsonify({
+            "task_id": task.id,
+            "status": "queued"
+        }), 202
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/send-email", methods=["POST"])
+@login_required
+def api_send_email():
+    """
+    Submit async task to send email
+    """
+    try:
+        from tasks.email_tasks import send_screening_results_email
+        
+        email = session.get("email")
+        data = request.get_json()
+        
+        role = data.get("role", "")
+        mcq_score = data.get("mcq_score", 0)
+        code_score = data.get("code_score", 0)
+        passed = data.get("passed", False)
+        
+        # Submit task
+        task = send_screening_results_email.delay(
+            user_email=email,
+            role=role,
+            mcq_score=mcq_score,
+            code_score=code_score,
+            passed=passed
+        )
+        
+        return jsonify({
+            "task_id": task.id,
+            "status": "queued",
+            "message": "Email will be sent shortly"
+        }), 202
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CELERY WORKER MONITORING
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/workers")
+def admin_workers():
+    """
+    Show Celery worker status (admin only for now)
+    In production, add proper auth
+    """
+    try:
+        from celery_app import app as celery_app
+        
+        # Get active tasks
+        active_tasks = celery_app.control.inspect().active()
+        scheduled_tasks = celery_app.control.inspect().scheduled()
+        registered_tasks = celery_app.control.inspect().registered()
+        
+        return jsonify({
+            "active_tasks": active_tasks or {},
+            "scheduled_tasks": scheduled_tasks or {},
+            "registered_tasks": registered_tasks or {}
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e), "message": "Celery workers not responding"}), 500
+
+
 if __name__ == "__main__":
     app.run(debug=True)

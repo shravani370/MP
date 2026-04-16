@@ -1,0 +1,100 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: interview_proai_db
+    environment:
+      POSTGRES_DB: interview_proai
+      POSTGRES_USER: interview_user
+      POSTGRES_PASSWORD: interview_password_dev
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Optional: seed db on first run
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U interview_user -d interview_proai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - interview_network
+
+  # Redis Cache & Session Store
+  redis:
+    image: redis:7-alpine
+    container_name: interview_proai_cache
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - interview_network
+
+  # Flask Application (optional - for full stack dev)
+  app:
+    build: .
+    container_name: interview_proai_app
+    environment:
+      FLASK_ENV: development
+      FLASK_DEBUG: 1
+      DATABASE_URL: postgresql://interview_user:interview_password_dev@postgres:5432/interview_proai
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: dev_key_change_in_production
+      SECURE_COOKIES: "False"
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app
+      - /app/__pycache__
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - interview_network
+    command: python app.py
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  interview_network:
+    driver: bridge
+
+# ═════════════════════════════════════════════════════════════════════════
+# Usage:
+#
+# Start services:
+#   docker-compose up -d
+#
+# View logs:
+#   docker-compose logs -f app
+#   docker-compose logs -f postgres
+#
+# Connect to PostgreSQL:
+#   docker-compose exec postgres psql -U interview_user -d interview_proai
+#
+# Stop services:
+#   docker-compose down
+#
+# Reset volumes (DELETE ALL DATA):
+#   docker-compose down -v
+#
+# Run migrations:
+#   docker-compose exec app alembic upgrade head
+#
+# ═════════════════════════════════════════════════════════════════════════

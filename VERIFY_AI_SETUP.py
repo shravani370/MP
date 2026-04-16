@@ -8,25 +8,27 @@ import sys
 import os
 sys.path.insert(0, '/Users/shravani/Documents/Interview-ProAI')
 
-from utils.ai_engine import _ollama, generate_question, generate_mcq_questions
+from utils.ai_engine import generate_question, generate_mcq_questions
+from utils.ai_backends import get_ai_manager
 
 print("\n" + "="*80)
 print("INTERVIEW-PROAI: AI INTEGRATION VERIFICATION")
 print("="*80)
 
-# Test 1: Check Ollama connection
-print("\n[1] Checking Ollama Connection...")
+# Test 1: Check AI Backend connection
+print("\n[1] Checking AI Backend Connection...")
 try:
-    test_response = _ollama("Say 'OK' only.")
+    ai = get_ai_manager()
+    test_response = ai.generate("Say 'OK' only.")
     if test_response and not test_response.startswith("["):
-        print(f"    ✅ Ollama is running and responding")
+        print(f"    ✅ AI backend is running and responding")
         print(f"       Response: {test_response[:50]}")
     else:
-        print(f"    ⚠️  Ollama response seems incorrect")
+        print(f"    ⚠️  AI backend response seems incorrect")
         print(f"       Response: {test_response[:60]}")
 except Exception as e:
-    print(f"    ❌ Ollama connection failed: {e}")
-    print("    💡 Make sure Ollama is running: `ollama serve`")
+    print(f"    ❌ AI backend connection failed: {e}")
+    print("    💡 Check OPENAI_API_KEY or ensure Ollama is running: `ollama serve`")
 
 # Test 2: MCQ Generation
 print("\n[2] Testing MCQ Generation for 'Software Engineer'...")

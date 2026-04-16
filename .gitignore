@@ -1,8 +1,53 @@
 .env
+.env.local
+.env.*.local
+
+# Database files
 __pycache__/
 *.pyc
-flask_session/
-client_secret.json
+*.pyo
+*.db
+*.sqlite
+*.sqlite3
 users.db
+interview_proai.db
+postgres_data/
+redis_data/
+
+# Session and cache
+flask_session/
+.webassets-cache/
+
+# Credentials and secrets
+client_secret.json
+credentials.json
+*.pem
+*.key
+
+# OS and IDE
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Uploads and temp files
 uploads/
+temp/
+tmp/
+
+# Logs
+*.log
+logs/
+
+# Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/

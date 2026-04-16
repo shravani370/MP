@@ -70,8 +70,11 @@ def require_csrf(f):
 
 def setup_secure_session(app):
     """Configure session security settings"""
+    # Allow secure cookies to be disabled for local development
+    secure_cookies = os.getenv("SECURE_COOKIES", "False").lower() in ("true", "1", "yes")
+    
     app.config.update(
-        SESSION_COOKIE_SECURE=True,  # Only send over HTTPS
+        SESSION_COOKIE_SECURE=secure_cookies,  # Only send over HTTPS in production
         SESSION_COOKIE_HTTPONLY=True,  # No JS access
         SESSION_COOKIE_SAMESITE='Lax',  # CSRF protection
         PERMANENT_SESSION_LIFETIME=3600,  # 1 hour

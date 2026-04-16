@@ -167,7 +167,7 @@ class AnthropicBackend(AIBackend):
         if not self.api_key:
             return False
         try:
-            import anthropic
+            import anthropic  # type: ignore
             client = anthropic.Anthropic(api_key=self.api_key)
             # Minimal API call to verify credentials
             client.messages.create(
@@ -182,7 +182,7 @@ class AnthropicBackend(AIBackend):
     
     def generate(self, prompt: str, **kwargs) -> str:
         try:
-            import anthropic
+            import anthropic  # type: ignore
             client = anthropic.Anthropic(api_key=self.api_key)
             response = client.messages.create(
                 model=self.model,
@@ -236,7 +236,7 @@ class GeminiBackend(AIBackend):
         if not self.api_key:
             return False
         try:
-            import google.generativeai as genai
+            import google.generativeai as genai  # type: ignore
             genai.configure(api_key=self.api_key)
             model = genai.GenerativeModel(self.model)
             model.generate_content("Hi", stream=False)
@@ -247,7 +247,7 @@ class GeminiBackend(AIBackend):
     
     def generate(self, prompt: str, **kwargs) -> str:
         try:
-            import google.generativeai as genai
+            import google.generativeai as genai  # type: ignore
             genai.configure(api_key=self.api_key)
             model = genai.GenerativeModel(self.model)
             response = model.generate_content(prompt, stream=False)
