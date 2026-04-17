@@ -14,7 +14,13 @@ import json
 from sqlalchemy import select
 from models.db import db, User, ScreeningResult, SavedJob, CoverLetter
 from flask_mail import Mail
-from celery_app import app as celery_app
+
+# Try to import Celery (optional - requires Python < 3.14)
+try:
+    from celery_app import app as celery_app
+except (ModuleNotFoundError, ImportError):
+    celery_app = None
+    print("⚠️  WARNING: Celery not available (requires Python < 3.14). Async tasks disabled.")
 
 # ================= ENV =================
 load_dotenv()
@@ -63,12 +69,13 @@ app.config.update(
 )
 mail = Mail(app)
 
-# Initialize Celery with Flask app context
-celery_app.conf.update(app.config)
+# Initialize Celery with Flask app context (if available)
+if celery_app:
+    celery_app.conf.update(app.config)
 
-@celery_app.task(bind=True)
-def debug_task(self):
-    print(f'Celery request: {self.request!r}')
+    @celery_app.task(bind=True)
+    def debug_task(self):
+        print(f'Celery request: {self.request!r}')
 
 # Setup secure session configuration
 setup_secure_session(app)
@@ -98,12 +105,20 @@ def inject_csrf_token():
 def init_db_with_app():
     """Initialize database tables (development only - use alembic in production)"""
     with app.app_context():
-        db.create_all()
-        print("✅ Database tables created/verified")
+        try:
+            db.create_all()
+            print("✅ Database tables created/verified")
+        except Exception as e:
+            print(f"⚠️  Database initialization skipped: {str(e)}")
 
 # Initialize DB on app start (ensures tables exist for development)
+# Skip if database is not available
 with app.app_context():
-    db.create_all()
+    try:
+        db.create_all()
+        print("✅ Database initialized successfully")
+    except Exception as e:
+        print(f"⚠️  Database not available, running in read-only mode: {str(e)[:100]}")
 
 
 # ================= SCREENING BLUEPRINT =================
@@ -388,55 +403,68 @@ def profile():
             return render_template("profile.html", csrf_token=generate_csrf_token())
         
         try:
-            conn = sqlite3.connect("users.db")
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET name=? WHERE email=?", (name, email))
-            conn.commit()
-            conn.close()
-            
-            # Update session
-            session["user"] = name
-            session.modified = True
-            
-            flash("✅ Profile updated successfully!", "success")
-            return redirect(url_for("profile"))
+            # Update user using ORM
+            user = User.query.filter_by(email=email).first()
+            if user:
+                user.name = name
+                db.session.commit()
+                
+                # Update session
+                session["user"] = name
+                session.modified = True
+                
+                flash("✅ Profile updated successfully!", "success")
+                return redirect(url_for("profile"))
+            else:
+                flash("❌ User not found", "error")
+                return render_template("profile.html", csrf_token=generate_csrf_token())
         
         except Exception as e:
+            db.session.rollback()
             flash(f"❌ Error updating profile: {e}", "error")
             return render_template("profile.html", csrf_token=generate_csrf_token())
     
     # GET request - fetch user stats
     try:
-        conn = sqlite3.connect("users.db")
-        cursor = conn.cursor()
+        # Get user and their screening results using ORM
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            flash("❌ User not found", "error")
+            return render_template("profile.html", user=user_name, csrf_token=generate_csrf_token())
         
-        # Get interview statistics
-        cursor.execute("""
-            SELECT COUNT(*) as total_interviews,
-                   AVG((mcq_score + code_score) / 2.0) as avg_score
-            FROM screening_results 
-            WHERE email = ?
-        """, (email,))
-        stats = cursor.fetchone()
+        # Get all screening results for statistics
+        all_results = db.session.query(ScreeningResult).filter_by(user_id=user.id).all()
         
-        # Get recent screenings
-        cursor.execute("""
-            SELECT role, mcq_score, code_score, passed, created_at 
-            FROM screening_results 
-            WHERE email = ? 
-            ORDER BY created_at DESC 
-            LIMIT 5
-        """, (email,))
-        recent_interviews = cursor.fetchall()
+        total_interviews = len(all_results)
+        avg_score = 0
+        if all_results:
+            valid_scores = [r for r in all_results if r.mcq_score and r.code_score]
+            if valid_scores:
+                avg_score = round(sum((r.mcq_score + r.code_score) / 2.0 for r in valid_scores) / len(valid_scores), 2)
         
-        conn.close()
+        # Get recent screenings (last 5)
+        recent_interviews = db.session.query(ScreeningResult).filter_by(
+            user_id=user.id
+        ).order_by(ScreeningResult.created_at.desc()).limit(5).all()
+        
+        # Format results for template
+        formatted_interviews = [
+            {
+                'role': r.role,
+                'mcq_score': r.mcq_score,
+                'code_score': r.code_score,
+                'passed': r.passed,
+                'created_at': r.created_at
+            }
+            for r in recent_interviews
+        ]
         
         profile_data = {
             "user": user_name,
             "email": email,
-            "total_interviews": stats[0] if stats else 0,
-            "avg_score": round(stats[1], 2) if stats and stats[1] else 0,
-            "recent_interviews": recent_interviews,
+            "total_interviews": total_interviews,
+            "avg_score": avg_score,
+            "recent_interviews": formatted_interviews,
             "csrf_token": generate_csrf_token()
         }
         
@@ -836,19 +864,39 @@ JSON:"""
         print("RAW AI RESPONSE:", raw)
 
         data = None
+        
+        # Attempt 1: Direct JSON parsing
         try:
             data = json.loads(raw)
-        except Exception:
-            pass
-
+            print("✅ Direct JSON parse successful")
+        except Exception as e:
+            print(f"❌ Direct parse failed: {e}")
+        
+        # Attempt 2: Strip markdown code blocks
+        if not data:
+            try:
+                clean = raw.strip()
+                if clean.startswith("```"):
+                    clean = clean.split("```")[1]
+                    if clean.startswith("json"):
+                        clean = clean[4:]
+                    clean = clean.strip()
+                data = json.loads(clean)
+                print("✅ Markdown strip parse successful")
+            except Exception as e:
+                print(f"❌ Markdown strip failed: {e}")
+        
+        # Attempt 3: Extract JSON from text
         if not data:
             try:
                 start = raw.index("{")
                 end = raw.rindex("}") + 1
                 data = json.loads(raw[start:end])
-            except Exception:
-                pass
-
+                print("✅ Extract JSON parse successful")
+            except Exception as e:
+                print(f"❌ Extract JSON failed: {e}")
+        
+        # Attempt 4: Fix truncated JSON
         if not data:
             try:
                 fixed = raw.strip()
@@ -859,18 +907,32 @@ JSON:"""
                 for _ in range(open_braces):
                     fixed += "}"
                 data = json.loads(fixed)
-                print("FIXED TRUNCATED JSON ✅")
-            except Exception:
-                pass
-
+                print("✅ Fixed truncated JSON successful")
+            except Exception as e:
+                print(f"❌ Fix truncated failed: {e}")
+        
+        # Attempt 5: Alternative - if response looks like error, provide default
         if not data:
-            print("JSON PARSE FAILED. Raw was:", raw)
-            data = {
-                "score": 0,
-                "matched_skills": [],
-                "missing_skills": [],
-                "suggestions": ["Could not parse AI response. Check terminal for raw output."]
-            }
+            if "[" in raw.lower() or "error" in raw.lower():
+                print("⚠️  AI returned error or malformed response")
+                data = {
+                    "score": 25,
+                    "matched_skills": [],
+                    "missing_skills": [],
+                    "suggestions": [
+                        "AI analysis encountered an issue. Please try again.",
+                        "Ensure your resume has clear skill listings.",
+                        "Include industry keywords matching the job description."
+                    ]
+                }
+            else:
+                print("JSON PARSE FAILED. Raw was:", raw)
+                data = {
+                    "score": 0,
+                    "matched_skills": [],
+                    "missing_skills": [],
+                    "suggestions": ["Could not parse AI response. Check terminal for raw output."]
+                }
 
     except Exception as e:
         print("AI Error:", e)
@@ -1030,16 +1092,29 @@ def saved_jobs():
         return redirect(url_for("google_login"))
     
     try:
-        conn = sqlite3.connect("users.db")
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM saved_jobs WHERE email=? ORDER BY saved_at DESC", (email,))
-        jobs = [dict(job) for job in cursor.fetchall()]
-        # Ensure job_id is treated as string for consistency
-        for job in jobs:
-            job['job_id'] = str(job['job_id'])
-        conn.close()
-    except sqlite3.OperationalError as e:
+        # Get user and their saved jobs using ORM
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            jobs = []
+        else:
+            saved_jobs_query = db.session.query(SavedJob).filter_by(
+                user_id=user.id
+            ).order_by(SavedJob.saved_at.desc()).all()
+            
+            # Convert to dictionaries for template compatibility
+            jobs = [
+                {
+                    'id': job.id,
+                    'job_id': str(job.job_id),
+                    'title': job.title,
+                    'company': job.company,
+                    'location': job.location,
+                    'url': job.url,
+                    'saved_at': job.saved_at
+                }
+                for job in saved_jobs_query
+            ]
+    except Exception as e:
         print(f"Database error in saved_jobs: {e}")
         jobs = []
     
@@ -1060,49 +1135,56 @@ def api_save_job():
         if not job_id:
             return {"status": "error", "message": "Missing job_id"}, 400
         
-        conn = sqlite3.connect("users.db")
-        cursor = conn.cursor()
-        
         try:
+            # Get user
+            user = User.query.filter_by(email=email).first()
+            if not user:
+                return {"status": "error", "message": "User not found"}, 404
+            
             if action == "save":
-                # Insert or ignore if already saved
-                cursor.execute(
-                    """INSERT OR IGNORE INTO saved_jobs 
-                       (email, job_id, title, company, location, url) 
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (email, job_id, data.get("title", ""), data.get("company", ""),
-                     data.get("location", ""), data.get("url", ""))
-                )
+                # Check if job already saved
+                existing = SavedJob.query.filter_by(
+                    user_id=user.id,
+                    job_id=job_id
+                ).first()
+                
+                if not existing:
+                    # Create new saved job
+                    saved_job = SavedJob(
+                        user_id=user.id,
+                        email=email,
+                        job_id=job_id,
+                        title=data.get("title", ""),
+                        company=data.get("company", ""),
+                        location=data.get("location", ""),
+                        url=data.get("url", "")
+                    )
+                    db.session.add(saved_job)
+                    db.session.commit()
+                    return {"status": "ok", "message": "Job saved successfully"}
+                else:
+                    return {"status": "ok", "message": "Job already saved"}
+                    
             elif action == "unsave":
-                cursor.execute(
-                    "DELETE FROM saved_jobs WHERE email=? AND job_id=?",
-                    (email, job_id)
-                )
-            conn.commit()
-            return {"status": "ok", "message": f"Job {action}d successfully"}
-        except sqlite3.OperationalError as e:
-            print(f"Database error in api_save_job: {e}")
-            # Table might not exist, try to create it
-            try:
-                cursor.execute("""
-                CREATE TABLE IF NOT EXISTS saved_jobs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    email TEXT,
-                    job_id TEXT,
-                    title TEXT,
-                    company TEXT,
-                    location TEXT,
-                    url TEXT,
-                    saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(email, job_id)
-                )
-                """)
-                conn.commit()
-                return {"status": "error", "message": "Database table created. Please try again."}, 500
-            except Exception as create_err:
-                return {"status": "error", "message": str(create_err)}, 500
-        finally:
-            conn.close()
+                # Delete saved job
+                saved_job = SavedJob.query.filter_by(
+                    user_id=user.id,
+                    job_id=job_id
+                ).first()
+                
+                if saved_job:
+                    db.session.delete(saved_job)
+                    db.session.commit()
+                    return {"status": "ok", "message": "Job unsaved successfully"}
+                else:
+                    return {"status": "ok", "message": "Job was not saved"}
+            else:
+                return {"status": "error", "message": "Invalid action"}, 400
+                
+        except Exception as db_error:
+            db.session.rollback()
+            print(f"Database error in api_save_job: {db_error}")
+            return {"status": "error", "message": str(db_error)}, 500
     except Exception as e:
         print(f"Error in api_save_job: {e}")
         return {"status": "error", "message": str(e)}, 500
@@ -1221,16 +1303,18 @@ def job_result():
     email = session.get("email")
     if email:
         try:
-            conn = sqlite3.connect("users.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT job_id FROM saved_jobs WHERE email=?", (email,))
-            saved_job_ids = {str(row[0]) for row in cursor.fetchall()}
-            conn.close()
-            for job in jobs:
-                job["saved"] = str(job.get("id", "")) in saved_job_ids
-        except sqlite3.OperationalError as db_error:
+            user = User.query.filter_by(email=email).first()
+            if user:
+                saved_jobs_query = db.session.query(SavedJob.job_id).filter_by(user_id=user.id).all()
+                saved_job_ids = {str(row[0]) for row in saved_jobs_query}
+                for job in jobs:
+                    job["saved"] = str(job.get("id", "")) in saved_job_ids
+            else:
+                for job in jobs:
+                    job["saved"] = False
+        except Exception as db_error:
             print(f"Database error in job_result: {db_error}")
-            # Mark all jobs as not saved if table doesn't exist
+            # Mark all jobs as not saved if query fails
             for job in jobs:
                 job["saved"] = False
     else:
@@ -1261,6 +1345,12 @@ def cover_letter():
     
     letter = None
     saved = []
+    
+    # Get user (needed for all operations)
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        flash("❌ User not found", "error")
+        return redirect(url_for("google_login"))
     
     if request.method == "POST":
         name = request.form.get("name", "").strip()
@@ -1297,21 +1387,25 @@ Write a compelling, personalized 3-4 paragraph cover letter. No salutation/date 
                 flash("❌ AI failed to generate letter. Try again.", "error")
                 return render_template("cover_letter.html", letter=None, saved=[])
             
-            # Save to database
+            # Save to database using ORM
             try:
-                conn = sqlite3.connect("users.db")
-                cursor = conn.cursor()
-                cursor.execute(
-                    """INSERT INTO cover_letters (email, name, role, company, job_desc, resume_text, letter)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (email, name, role, company, job_desc, resume_text, letter)
+                cover_letter_obj = CoverLetter(
+                    user_id=user.id,
+                    email=email,
+                    name=name,
+                    role=role,
+                    company=company,
+                    job_desc=job_desc,
+                    resume_text=resume_text,
+                    letter=letter
                 )
-                conn.commit()
-                conn.close()
+                db.session.add(cover_letter_obj)
+                db.session.commit()
                 flash("✅ Cover letter saved!", "success")
-            except sqlite3.OperationalError as e:
-                print(f"Database error in cover_letter: {e}")
-                # Table might not exist, but letter is still generated
+            except Exception as save_error:
+                db.session.rollback()
+                print(f"Database error in cover_letter: {save_error}")
+                # Letter is still generated even if save fails
                 flash("⚠️ Letter generated but not saved", "warning")
         
         except requests.exceptions.Timeout:
@@ -1324,17 +1418,21 @@ Write a compelling, personalized 3-4 paragraph cover letter. No salutation/date 
     
     # Load saved letters
     try:
-        conn = sqlite3.connect("users.db")
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute(
-            """SELECT id, name, role, company, created_at FROM cover_letters 
-               WHERE email=? ORDER BY created_at DESC LIMIT 10""",
-            (email,)
-        )
-        saved = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-    except sqlite3.OperationalError as e:
+        saved_letters = db.session.query(CoverLetter).filter_by(
+            user_id=user.id
+        ).order_by(CoverLetter.created_at.desc()).limit(10).all()
+        
+        saved = [
+            {
+                'id': cl.id,
+                'name': cl.name,
+                'role': cl.role,
+                'company': cl.company,
+                'created_at': cl.created_at
+            }
+            for cl in saved_letters
+        ]
+    except Exception as e:
         print(f"Database error loading saved letters: {e}")
         saved = []
     
@@ -1375,6 +1473,9 @@ def get_task_status(task_id):
       "error": "optional error message"
     }
     """
+    if not celery_app:
+        return jsonify({"error": "Async tasks not available (Celery not installed)"}), 503
+    
     try:
         result = celery_app.AsyncResult(task_id)
         
@@ -1544,9 +1645,10 @@ def admin_workers():
     Show Celery worker status (admin only for now)
     In production, add proper auth
     """
+    if not celery_app:
+        return jsonify({"error": "Celery not available (requires Python < 3.14)", "active_tasks": {}}), 503
+    
     try:
-        from celery_app import app as celery_app
-        
         # Get active tasks
         active_tasks = celery_app.control.inspect().active()
         scheduled_tasks = celery_app.control.inspect().scheduled()

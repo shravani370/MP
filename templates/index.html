@@ -291,6 +291,7 @@ footer {
         👤 {{ user }}
       </div>
       <div class="dropdown" id="menu">
+        <div onclick="window.location.href='/dashboard'">📊 Dashboard</div>
         <div onclick="window.location.href='/profile'">👤 Profile</div>
         <div class="danger" onclick="window.location.href='/logout'">🚪 Logout</div>
       </div>
@@ -329,6 +330,11 @@ footer {
 <div class="section">
   <div class="section-label">More tools</div>
   <div class="feature-grid">
+    <div class="feature-card" onclick="window.location.href='/dashboard'">
+      <div class="feature-icon">📊</div>
+      <h3>Dashboard</h3>
+      <p>Track your performance, screening history, and saved jobs.</p>
+    </div>
     <div class="feature-card" onclick="window.location.href='/resume_suite'">
       <div class="feature-icon">📄</div>
       <h3>Resume Suite</h3>

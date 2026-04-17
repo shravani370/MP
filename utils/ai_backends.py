@@ -48,13 +48,31 @@ class OllamaBackend(AIBackend):
     
     def generate(self, prompt: str, **kwargs) -> str:
         try:
+            # Add JSON constraint if available in model and requested
+            payload = {
+                "model": self.model, 
+                "prompt": prompt, 
+                "stream": False,
+                "temperature": kwargs.get("temperature", 0.3),  # Lower temp for consistency
+            }
+            
+            # Optional: add format constraint for newer Ollama versions
+            # Uncomment if your Ollama supports it
+            # payload["format"] = "json"
+            
             resp = requests.post(
                 self.url,
-                json={"model": self.model, "prompt": prompt, "stream": False},
+                json=payload,
                 timeout=self.timeout,
             )
             resp.raise_for_status()
-            return resp.json().get("response", "").strip()
+            response_text = resp.json().get("response", "").strip()
+            
+            if not response_text:
+                logger.warning("Ollama returned empty response")
+                return "{}"
+            
+            return response_text
         except Exception as e:
             logger.warning(f"Ollama generation failed: {e}")
             return f"[Ollama error: {e}]"
@@ -74,17 +92,48 @@ Respond in valid JSON only (no markdown):
   "verdict": "Excellent|Good|Average|Poor"
 }}"""
         raw = self.generate(prompt)
+        
+        # Try multiple JSON parsing strategies
+        result = None
+        
+        # Strategy 1: Direct parse
         try:
-            clean = raw.strip().lstrip("```json").rstrip("```").strip()
-            return json.loads(clean)
+            result = json.loads(raw)
         except Exception:
+            pass
+        
+        # Strategy 2: Extract from markdown
+        if not result:
+            try:
+                clean = raw.strip()
+                if "```" in clean:
+                    clean = clean.split("```")[1]
+                    if clean.startswith("json"):
+                        clean = clean[4:]
+                result = json.loads(clean.strip())
+            except Exception:
+                pass
+        
+        # Strategy 3: Find and extract JSON object
+        if not result:
+            try:
+                start = raw.index("{")
+                end = raw.rindex("}") + 1
+                result = json.loads(raw[start:end])
+            except Exception:
+                pass
+        
+        # Fallback if all parsing failed
+        if not result:
             logger.warning(f"Ollama evaluation parse failed: {raw}")
-            return {
+            result = {
                 "score": 5,
                 "strengths": "Answer provided",
-                "improvements": raw or "Could not evaluate",
+                "improvements": "Could not evaluate - AI response parsing failed",
                 "verdict": "Average",
             }
+        
+        return result
 
 
 class OpenAIBackend(AIBackend):
@@ -140,17 +189,48 @@ Respond in valid JSON only (no markdown):
   "verdict": "Excellent|Good|Average|Poor"
 }}"""
         raw = self.generate(prompt, temperature=0)
+        
+        # Try multiple JSON parsing strategies
+        result = None
+        
+        # Strategy 1: Direct parse
         try:
-            clean = raw.strip().lstrip("```json").rstrip("```").strip()
-            return json.loads(clean)
+            result = json.loads(raw)
         except Exception:
+            pass
+        
+        # Strategy 2: Extract from markdown
+        if not result:
+            try:
+                clean = raw.strip()
+                if "```" in clean:
+                    clean = clean.split("```")[1]
+                    if clean.startswith("json"):
+                        clean = clean[4:]
+                result = json.loads(clean.strip())
+            except Exception:
+                pass
+        
+        # Strategy 3: Find and extract JSON object
+        if not result:
+            try:
+                start = raw.index("{")
+                end = raw.rindex("}") + 1
+                result = json.loads(raw[start:end])
+            except Exception:
+                pass
+        
+        # Fallback if all parsing failed
+        if not result:
             logger.warning(f"OpenAI evaluation parse failed: {raw}")
-            return {
+            result = {
                 "score": 5,
                 "strengths": "Answer provided",
-                "improvements": raw or "Could not evaluate",
+                "improvements": "Could not evaluate - AI response parsing failed",
                 "verdict": "Average",
             }
+        
+        return result
 
 
 class AnthropicBackend(AIBackend):
@@ -209,17 +289,48 @@ Respond in valid JSON only (no markdown):
   "verdict": "Excellent|Good|Average|Poor"
 }}"""
         raw = self.generate(prompt)
+        
+        # Try multiple JSON parsing strategies
+        result = None
+        
+        # Strategy 1: Direct parse
         try:
-            clean = raw.strip().lstrip("```json").rstrip("```").strip()
-            return json.loads(clean)
+            result = json.loads(raw)
         except Exception:
+            pass
+        
+        # Strategy 2: Extract from markdown
+        if not result:
+            try:
+                clean = raw.strip()
+                if "```" in clean:
+                    clean = clean.split("```")[1]
+                    if clean.startswith("json"):
+                        clean = clean[4:]
+                result = json.loads(clean.strip())
+            except Exception:
+                pass
+        
+        # Strategy 3: Find and extract JSON object
+        if not result:
+            try:
+                start = raw.index("{")
+                end = raw.rindex("}") + 1
+                result = json.loads(raw[start:end])
+            except Exception:
+                pass
+        
+        # Fallback if all parsing failed
+        if not result:
             logger.warning(f"Anthropic evaluation parse failed: {raw}")
-            return {
+            result = {
                 "score": 5,
                 "strengths": "Answer provided",
-                "improvements": raw or "Could not evaluate",
+                "improvements": "Could not evaluate - AI response parsing failed",
                 "verdict": "Average",
             }
+        
+        return result
 
 
 class GeminiBackend(AIBackend):
@@ -271,17 +382,48 @@ Respond in valid JSON only (no markdown):
   "verdict": "Excellent|Good|Average|Poor"
 }}"""
         raw = self.generate(prompt)
+        
+        # Try multiple JSON parsing strategies
+        result = None
+        
+        # Strategy 1: Direct parse
         try:
-            clean = raw.strip().lstrip("```json").rstrip("```").strip()
-            return json.loads(clean)
+            result = json.loads(raw)
         except Exception:
+            pass
+        
+        # Strategy 2: Extract from markdown
+        if not result:
+            try:
+                clean = raw.strip()
+                if "```" in clean:
+                    clean = clean.split("```")[1]
+                    if clean.startswith("json"):
+                        clean = clean[4:]
+                result = json.loads(clean.strip())
+            except Exception:
+                pass
+        
+        # Strategy 3: Find and extract JSON object
+        if not result:
+            try:
+                start = raw.index("{")
+                end = raw.rindex("}") + 1
+                result = json.loads(raw[start:end])
+            except Exception:
+                pass
+        
+        # Fallback if all parsing failed
+        if not result:
             logger.warning(f"Gemini evaluation parse failed: {raw}")
-            return {
+            result = {
                 "score": 5,
                 "strengths": "Answer provided",
-                "improvements": raw or "Could not evaluate",
+                "improvements": "Could not evaluate - AI response parsing failed",
                 "verdict": "Average",
             }
+        
+        return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════
