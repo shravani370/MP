@@ -25,6 +25,10 @@ except (ModuleNotFoundError, ImportError):
 # ================= ENV =================
 load_dotenv()
 
+# Validate environment variables at startup
+from utils.validate_env import validate_env
+validate_env()
+
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "dev_key_change_in_production")
 
