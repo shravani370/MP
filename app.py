@@ -126,12 +126,33 @@ def init_db_with_app():
         except Exception as e:
             print(f"⚠️  Database initialization skipped: {str(e)}")
 
+
+def ensure_schema_integrity():
+    """Ensure all required columns exist in tables"""
+    from sqlalchemy import inspect, text
+    
+    try:
+        inspector = inspect(db.engine)
+        
+        if 'users' in inspector.get_table_names():
+            users_columns = {col['name'] for col in inspector.get_columns('users')}
+            required = {'id', 'name', 'email', 'password', 'auth_type', 'created_at'}
+            missing = required - users_columns
+            
+            if missing:
+                print(f"⚠️  Missing columns in 'users' table: {missing}")
+                print("💡 Run: python fix_database_schema.py")
+    except Exception as e:
+        pass  # Silently fail - not critical
+
+
 # Initialize DB on app start (ensures tables exist for development)
 # Skip if database is not available
 with app.app_context():
     try:
         db.create_all()
         print("✅ Database initialized successfully")
+        ensure_schema_integrity()
     except Exception as e:
         print(f"⚠️  Database not available, running in read-only mode: {str(e)[:100]}")
 
