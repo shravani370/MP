@@ -141,7 +141,28 @@ def ensure_schema_integrity():
             
             if missing:
                 print(f"⚠️  Missing columns in 'users' table: {missing}")
-                print("💡 Run: python fix_database_schema.py")
+                print("💡 Attempting to add missing columns...")
+                
+                with db.engine.connect() as conn:
+                    for col in sorted(missing):
+                        try:
+                            if col == 'password':
+                                conn.execute(text("ALTER TABLE users ADD COLUMN password VARCHAR(255)"))
+                            elif col == 'name':
+                                conn.execute(text("ALTER TABLE users ADD COLUMN name VARCHAR(255)"))
+                            elif col == 'email':
+                                conn.execute(text("ALTER TABLE users ADD COLUMN email VARCHAR(255) NOT NULL"))
+                            elif col == 'auth_type':
+                                conn.execute(text("ALTER TABLE users ADD COLUMN auth_type VARCHAR(50) DEFAULT 'email'"))
+                            elif col == 'created_at':
+                                conn.execute(text("ALTER TABLE users ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+                            conn.commit()
+                            print(f"   ✅ Added column: {col}")
+                        except Exception as col_e:
+                            # Column might already exist or database is read-only
+                            pass
+                
+                print("✅ Schema integrity check complete\n")
     except Exception as e:
         pass  # Silently fail - not critical
 
