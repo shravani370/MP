@@ -87,11 +87,25 @@ class EnvironmentValidator:
     
     @staticmethod
     def _check_required_vars(env):
-        """Verify all required variables are set."""
+        """Verify all required variables are set. Provides development defaults if needed."""
         required = EnvironmentValidator.REQUIRED_VARS.get(env, [])
         missing = [var for var in required if not os.getenv(var)]
         
-        if missing:
+        if missing and env == 'development':
+            # Development mode: provide helpful defaults
+            print(f"⚠️  Development mode: Missing variables will use defaults")
+            for var in missing:
+                if var == 'SECRET_KEY':
+                    import secrets
+                    default_key = secrets.token_urlsafe(32)
+                    os.environ['SECRET_KEY'] = default_key
+                    print(f"   📝 {var}: Generated temporary key")
+                elif var == 'DATABASE_URL':
+                    default_db = 'sqlite:///interview_proai.db'
+                    os.environ['DATABASE_URL'] = default_db
+                    print(f"   📝 {var}: Using SQLite database")
+        elif missing:
+            # Production mode: fail fast
             print(f"❌ CRITICAL: Missing required environment variables:")
             for var in missing:
                 print(f"   - {var}")

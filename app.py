@@ -104,6 +104,17 @@ def inject_csrf_token():
     return {"csrf_token": csrf_token}
 
 # ═══════════════════════════════════════════════════════════════════════════
+# SESSION PERSISTENCE HANDLER
+# ═══════════════════════════════════════════════════════════════════════════
+from datetime import timedelta
+
+@app.before_request
+def ensure_session_persists():
+    """Ensure all sessions persist across requests"""
+    session.permanent = True
+    app.permanent_session_lifetime = timedelta(hours=24)
+
+# ═══════════════════════════════════════════════════════════════════════════
 # DATABASE INITIALIZATION (use Alembic migrations in production)
 # ═══════════════════════════════════════════════════════════════════════════
 def init_db_with_app():
@@ -976,6 +987,11 @@ def job_resume_page():
         return redirect(url_for("google_login"))
     if not session.get("job_role"):
         return redirect(url_for("job"))
+    
+    # Ensure session persists for file uploads
+    session.permanent = True
+    session.modified = True
+    
     return render_template("job_resume.html")
 
 # ================= COUNTRY MAP =================
@@ -1302,6 +1318,10 @@ def job_result():
     session.pop("job_role", None)
     session.pop("job_location", None)
     session.pop("job_types", None)
+    
+    # Ensure session persists
+    session.permanent = True
+    session.modified = True
 
     # Add saved status to each job
     email = session.get("email")
@@ -1325,8 +1345,8 @@ def job_result():
         for job in jobs:
             job["saved"] = False
     
-    # Create job saves dict for template
-    job_saves = {job.get("id", ""): job.get("saved", False) for job in jobs}
+    # Create job saves dict for template with string keys (JSON serializable)
+    job_saves = {str(job.get("id", "")): job.get("saved", False) for job in jobs}
     
     return render_template(
         "job_result.html",
@@ -1666,6 +1686,35 @@ def admin_workers():
         
     except Exception as e:
         return jsonify({"error": str(e), "message": "Celery workers not responding"}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ERROR HANDLERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.errorhandler(400)
+def handle_bad_request(e):
+    """Handle 400 errors (CSRF token issues, bad form data, etc)"""
+    error_message = str(e)
+    
+    # Check if CSRF token is the issue
+    if "CSRF" in error_message or "csrf" in error_message or "token" in error_message:
+        return render_template(
+            "error.html",
+            error_code=400,
+            error_title="Security Token Expired",
+            error_message="Your security token has expired. Please refresh the page and try again.",
+            retry_link="/",
+            support_link="https://docs.interview-proai.com/troubleshooting"
+        ), 400
+    
+    return render_template(
+        "error.html",
+        error_code=400,
+        error_title="Bad Request",
+        error_message="There was an error with your request. Please try again.",
+        retry_link="/"
+    ), 400
 
 
 if __name__ == "__main__":

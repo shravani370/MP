@@ -67,7 +67,7 @@ body::after{content:"";position:fixed;top:0;right:0;width:50%;height:100%;backgr
         <div class="card-title">{{ job['title'] }}</div>
         <div class="card-co">🏢 {{ job['company'] }}</div>
         <div class="card-loc">📍 {{ job['location'] }}</div>
-        <div class="card-date">Saved {{ job['saved_at'][:10] }}</div>
+        <div class="card-date">Saved {{ job['saved_at'].strftime('%Y-%m-%d') if job['saved_at'] else 'Recently' }}</div>
       </div>
       <div class="card-footer">
         <a href="{{ job['url'] }}" target="_blank" class="btn-apply">Apply Now →</a>
