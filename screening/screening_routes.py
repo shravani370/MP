@@ -1,8 +1,60 @@
-from flask import Blueprint, render_template, request, session, redirect, url_for
-import time, random
-from utils.ai_engine import generate_mcq_questions, generate_coding_questions
+"""Screening routes blueprint for interview screening functionality"""
+from flask import Blueprint, render_template, session, request, redirect, url_for, flash
+from models.db import db, User, ScreeningResult
+from utils.ai_engine import generate_question
+from functools import wraps
 
-screening_bp = Blueprint("screening", __name__)
+# Create Blueprint
+screening_bp = Blueprint('screening', __name__, url_prefix='')
+
+def login_required(f):
+    """Decorator to require login for screening routes"""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get('user'):
+            return redirect('/google-login')
+        return f(*args, **kwargs)
+    return wrapper
+
+@screening_bp.route('/mock', methods=['GET', 'POST'])
+@login_required
+def mock_interview():
+    """Start a mock interview session"""
+    
+    # GET request - redirect to start interview
+    if request.method == 'GET':
+        return redirect(url_for('start'))
+    
+    # POST request - handle role selection
+    role = request.form.get('role', '').strip()
+    if not role:
+        flash('❌ Please select a role', 'error')
+        return redirect(url_for('start'))
+    
+    # Initialize interview session
+    current_user = session.get('user')
+    current_email = session.get('email')
+    
+    # Clear interview state while preserving auth
+    session.clear()
+    session['user'] = current_user
+    session['email'] = current_email
+    
+    # Generate first question
+    first_q = generate_question(role)
+    
+    # Initialize interview state
+    session['topic'] = role
+    session['mode'] = 'chat'
+    session['question'] = first_q
+    session['count'] = 0
+    session['messages'] = [{'role': 'ai', 'text': first_q, 'type': 'question'}]
+    session['asked_questions'] = [first_q]
+    session['answers'] = []
+    session['results'] = []
+    session.modified = True
+    
+    return redirect(url_for('interview'))
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # MCQ QUESTION POOLS — keyed by role keyword, 15+ Qs each so 10 are sampled
@@ -57,26 +109,27 @@ MCQ_POOLS = {
     ],
 
     "data scientist": [
-        {"q": "What is overfitting in machine learning?", "options": ["When a model performs well on unseen data", "When a model memorizes training data but fails on new data", "When a model is too simple", "When training takes too long"], "answer": 1},
-        {"q": "What does the bias-variance tradeoff refer to?", "options": ["Speed vs accuracy", "The balance between underfitting and overfitting", "Training size vs test size", "Precision vs recall"], "answer": 1},
-        {"q": "Which metric is best for imbalanced classification datasets?", "options": ["Accuracy", "F1 Score", "Mean Squared Error", "R²"], "answer": 1},
-        {"q": "What is cross-validation used for?", "options": ["Cleaning data", "Estimating model performance on unseen data", "Feature selection", "Hyperparameter logging"], "answer": 1},
-        {"q": "What does PCA stand for?", "options": ["Predictive Classification Algorithm", "Principal Component Analysis", "Probabilistic Clustering Approach", "Parallel Computation Architecture"], "answer": 1},
-        {"q": "What is regularization in ML?", "options": ["A technique to speed up training", "A penalty added to reduce model complexity and prevent overfitting", "A data preprocessing step", "A method to increase model accuracy"], "answer": 1},
-        {"q": "What is the purpose of the activation function in a neural network?", "options": ["To initialize weights", "To introduce non-linearity", "To normalize inputs", "To calculate the loss"], "answer": 1},
-        {"q": "Which algorithm is commonly used for classification and regression trees?", "options": ["KMeans", "DBSCAN", "CART", "PCA"], "answer": 2},
-        {"q": "What does 'precision' measure in classification?", "options": ["Of all actual positives, how many were predicted correctly", "Of all predicted positives, how many were actually positive", "The overall accuracy of the model", "The recall of the model"], "answer": 1},
-        {"q": "What is the vanishing gradient problem?", "options": ["Weights becoming too large during training", "Gradients becoming too small, slowing or stopping learning in deep networks", "Loss function not converging", "Overfitting in RNNs"], "answer": 1},
-        {"q": "Which distance metric does KNN use by default?", "options": ["Manhattan", "Cosine", "Euclidean", "Hamming"], "answer": 2},
-        {"q": "What is a confusion matrix?", "options": ["A matrix showing feature correlations", "A table showing TP, TN, FP, FN for a classifier", "A visualization of decision boundaries", "A weight initialization matrix"], "answer": 1},
-        {"q": "What is the purpose of dropout in neural networks?", "options": ["Speed up forward pass", "Randomly deactivate neurons during training to prevent overfitting", "Initialize weights to zero", "Normalize layer outputs"], "answer": 1},
-        {"q": "What is an embedding in NLP?", "options": ["A data augmentation technique", "A dense vector representation of words or tokens", "A tokenization strategy", "A type of attention mechanism"], "answer": 1},
-        {"q": "What does SMOTE do?", "options": ["Removes outliers", "Generates synthetic samples for the minority class", "Normalizes features", "Reduces dimensionality"], "answer": 1},
-        {"q": "What is the difference between supervised and unsupervised learning?", "options": ["No difference", "Supervised uses labelled data; unsupervised finds patterns in unlabelled data", "Unsupervised is always more accurate", "Supervised doesn't require training data"], "answer": 1},
-        {"q": "What is a ROC curve used for?", "options": ["Visualizing feature importance", "Evaluating classifier performance across all classification thresholds", "Plotting training loss over epochs", "Comparing regression models"], "answer": 1},
-        {"q": "What does 'recall' measure in classification?", "options": ["Of all predicted positives, how many were correct", "Of all actual positives, how many were correctly identified", "The overall model accuracy", "The precision of the model"], "answer": 1},
-        {"q": "What is gradient descent?", "options": ["A data preprocessing technique", "An optimization algorithm that minimizes a loss function by iteratively updating weights", "A regularization method", "A feature selection approach"], "answer": 1},
-        {"q": "What is a hyperparameter?", "options": ["A parameter learned during training", "A configuration value set before training that controls the learning process", "A type of neural network layer", "A metric for model evaluation"], "answer": 1},
+        {"q": "What is overfitting in machine learning?", "options": ["When a model performs well on unseen data", "When a model memorizes training data but fails on new data", "When a model is too simple", "When training takes too long"], "correct_answers": [1], "explanation": "Overfitting occurs when a model learns the training data too well, including its noise, and fails to generalize to new data."},
+        {"q": "What are valid types of recommender systems?", "options": ["Content-based filtering", "Collaborative filtering", "Knowledge-based systems", "All of the above"], "correct_answers": [3], "explanation": "All are valid recommender system types: Content-based uses item features, Collaborative uses user-item patterns, Knowledge-based uses domain expertise."},
+        {"q": "What does the bias-variance tradeoff refer to?", "options": ["Speed vs accuracy", "The balance between underfitting and overfitting", "Training size vs test size", "Precision vs recall"], "correct_answers": [1], "explanation": "The bias-variance tradeoff is about balancing a model's tendency to underfit (high bias) vs overfit (high variance)."},
+        {"q": "Which metric is best for imbalanced classification datasets?", "options": ["Accuracy", "F1 Score", "Mean Squared Error", "R²"], "correct_answers": [1], "explanation": "F1 Score is ideal for imbalanced datasets because accuracy alone is misleading when classes are imbalanced."},
+        {"q": "What is cross-validation used for?", "options": ["Cleaning data", "Estimating model performance on unseen data", "Feature selection", "Hyperparameter logging"], "correct_answers": [1], "explanation": "Cross-validation divides data into folds to get a more robust estimate of model performance."},
+        {"q": "What does PCA stand for?", "options": ["Predictive Classification Algorithm", "Principal Component Analysis", "Probabilistic Clustering Approach", "Parallel Computation Architecture"], "correct_answers": [1], "explanation": "PCA is a dimensionality reduction technique that identifies principal components (directions of maximum variance)."},
+        {"q": "What is regularization in ML?", "options": ["A technique to speed up training", "A penalty added to reduce model complexity and prevent overfitting", "A data preprocessing step", "A method to increase model accuracy"], "correct_answers": [1], "explanation": "Regularization adds a penalty term to the loss function to discourage overly complex models (L1, L2, etc)."},
+        {"q": "What is the purpose of the activation function in a neural network?", "options": ["To initialize weights", "To introduce non-linearity", "To normalize inputs", "To calculate the loss"], "correct_answers": [1], "explanation": "Activation functions introduce non-linearity, allowing neural networks to learn complex patterns."},
+        {"q": "Which clustering algorithms are valid choices?", "options": ["K-means", "Hierarchical clustering", "DBSCAN", "All of the above"], "correct_answers": [3], "explanation": "All are valid: K-means partitions data, Hierarchical creates dendrograms, DBSCAN identifies density-based clusters."},
+        {"q": "What does 'precision' measure in classification?", "options": ["Of all actual positives, how many were predicted correctly", "Of all predicted positives, how many were actually positive", "The overall accuracy of the model", "The recall of the model"], "correct_answers": [1], "explanation": "Precision = TP / (TP + FP) - of those we predicted as positive, how many were actually positive."},
+        {"q": "What is the vanishing gradient problem?", "options": ["Weights becoming too large during training", "Gradients becoming too small, slowing or stopping learning in deep networks", "Loss function not converging", "Overfitting in RNNs"], "correct_answers": [1], "explanation": "In deep networks with sigmoid/tanh activations, gradients can become vanishingly small during backpropagation."},
+        {"q": "Which distance metric does KNN use by default?", "options": ["Manhattan", "Cosine", "Euclidean", "Hamming"], "correct_answers": [2], "explanation": "KNN uses Euclidean distance by default, but Manhattan and other metrics can be configured."},
+        {"q": "What is a confusion matrix?", "options": ["A matrix showing feature correlations", "A table showing TP, TN, FP, FN for a classifier", "A visualization of decision boundaries", "A weight initialization matrix"], "correct_answers": [1], "explanation": "A confusion matrix shows True Positives, True Negatives, False Positives, and False Negatives for classification evaluation."},
+        {"q": "What is the purpose of dropout in neural networks?", "options": ["Speed up forward pass", "Randomly deactivate neurons during training to prevent overfitting", "Initialize weights to zero", "Normalize layer outputs"], "correct_answers": [1], "explanation": "Dropout randomly disables neurons during training, forcing the network to learn redundant representations."},
+        {"q": "What is an embedding in NLP?", "options": ["A data augmentation technique", "A dense vector representation of words or tokens", "A tokenization strategy", "A type of attention mechanism"], "correct_answers": [1], "explanation": "Embeddings map discrete tokens (words) to continuous vector spaces that capture semantic relationships."},
+        {"q": "What does SMOTE do?", "options": ["Removes outliers", "Generates synthetic samples for the minority class", "Normalizes features", "Reduces dimensionality"], "correct_answers": [1], "explanation": "SMOTE (Synthetic Minority Over-sampling) generates synthetic training samples for underrepresented classes."},
+        {"q": "What is the difference between supervised and unsupervised learning?", "options": ["No difference", "Supervised uses labelled data; unsupervised finds patterns in unlabelled data", "Unsupervised is always more accurate", "Supervised doesn't require training data"], "correct_answers": [1], "explanation": "Supervised learning uses labeled data (input-output pairs), while unsupervised finds patterns in unlabeled data."},
+        {"q": "What is a ROC curve used for?", "options": ["Visualizing feature importance", "Evaluating classifier performance across all classification thresholds", "Plotting training loss over epochs", "Comparing regression models"], "correct_answers": [1], "explanation": "ROC (Receiver Operating Characteristic) curves show the trade-off between true positive rate and false positive rate."},
+        {"q": "What does 'recall' measure in classification?", "options": ["Of all predicted positives, how many were correct", "Of all actual positives, how many were correctly identified", "The overall model accuracy", "The precision of the model"], "correct_answers": [1], "explanation": "Recall = TP / (TP + FN) - of all actual positives, how many did we successfully identify."},
+        {"q": "What is gradient descent?", "options": ["A data preprocessing technique", "An optimization algorithm that minimizes a loss function by iteratively updating weights", "A regularization method", "A feature selection approach"], "correct_answers": [1], "explanation": "Gradient descent is the primary optimization algorithm used to train neural networks and many other models."},
+        {"q": "What is a hyperparameter?", "options": ["A parameter learned during training", "A configuration value set before training that controls the learning process", "A type of neural network layer", "A metric for model evaluation"], "correct_answers": [1], "explanation": "Hyperparameters (learning rate, batch size, etc.) are set before training and control the learning process."},
     ],
 
     "ml engineer": [
@@ -625,52 +678,89 @@ def _login_required(f):
 
 def _run_code(code: str, test_cases: list, func_name: str) -> dict:
     """
-    Run code safely using RestrictedPython.
-    This is more secure than raw exec() but still not bulletproof.
-    For production, consider using a containerized executor (Docker, WebAssembly, etc).
+    Run code safely. First tries RestrictedPython, falls back to simple exec with numpy/pandas support.
     """
+    # Try to import RestrictedPython (preferred method)
     try:
         from restricted_python import compile_restricted, safe_globals
         from restricted_python.guards import safe_builtins, guarded_iter_unpack_sequence
+        use_restricted = True
     except ImportError:
-        # Fallback if RestrictedPython not available
-        return {"error": "Code execution engine not available", "passed": 0, "total": len(test_cases), "results": []}
+        use_restricted = False
     
-    # Additional safe builtins for code execution
-    SAFE_BUILTINS = safe_builtins.copy()
-    SAFE_BUILTINS.update({
-        "range": range, "len": len, "enumerate": enumerate, "zip": zip,
-        "sorted": sorted, "list": list, "dict": dict, "set": set,
-        "int": int, "str": str, "bool": bool, "float": float,
-        "abs": abs, "min": min, "max": max, "sum": sum,
-        "isinstance": isinstance, "type": type, "tuple": tuple,
-        "round": round, "any": any, "all": all,
-        "chr": chr, "ord": ord, "map": map, "filter": filter,
-    })
+    if use_restricted:
+        # Additional safe builtins for code execution
+        SAFE_BUILTINS = safe_builtins.copy()
+        SAFE_BUILTINS.update({
+            "range": range, "len": len, "enumerate": enumerate, "zip": zip,
+            "sorted": sorted, "list": list, "dict": dict, "set": set,
+            "int": int, "str": str, "bool": bool, "float": float,
+            "abs": abs, "min": min, "max": max, "sum": sum,
+            "isinstance": isinstance, "type": type, "tuple": tuple,
+            "round": round, "any": any, "all": all,
+            "chr": chr, "ord": ord, "map": map, "filter": filter,
+            "import": __import__,  # Allow imports
+        })
+        
+        try:
+            # Compile with RestrictedPython
+            byte_code = compile_restricted(code, "<sandbox>", "exec")
+            
+            if byte_code.errors:
+                error_msg = "; ".join(str(e) for e in byte_code.errors)
+                return {"error": f"Syntax error: {error_msg}", "passed": 0, "total": len(test_cases), "results": []}
+            
+            # Create safe execution namespace
+            ns = {
+                "__builtins__": SAFE_BUILTINS,
+                "_print_": lambda x: repr(x),
+                "_getiter_": iter,
+                "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
+            }
+            
+            # Execute compiled code
+            exec(byte_code, ns)
+            
+        except SyntaxError as e:
+            return {"error": f"Syntax error: {e}", "passed": 0, "total": len(test_cases), "results": []}
+        except Exception as e:
+            return {"error": f"Execution error: {str(e)[:100]}", "passed": 0, "total": len(test_cases), "results": []}
     
-    try:
-        # Compile with RestrictedPython
-        byte_code = compile_restricted(code, "<sandbox>", "exec")
-        
-        if byte_code.errors:
-            error_msg = "; ".join(str(e) for e in byte_code.errors)
-            return {"error": f"Syntax error: {error_msg}", "passed": 0, "total": len(test_cases), "results": []}
-        
-        # Create safe execution namespace
-        ns = {
-            "__builtins__": SAFE_BUILTINS,
-            "_print_": lambda x: repr(x),
-            "_getiter_": iter,
-            "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
+    else:
+        # Fallback: Simple exec with safe builtins (when RestrictedPython unavailable)
+        SAFE_BUILTINS = {
+            "range": range, "len": len, "enumerate": enumerate, "zip": zip,
+            "sorted": sorted, "list": list, "dict": dict, "set": set,
+            "int": int, "str": str, "bool": bool, "float": float,
+            "abs": abs, "min": min, "max": max, "sum": sum,
+            "isinstance": isinstance, "type": type, "tuple": tuple,
+            "round": round, "any": any, "all": all,
+            "chr": chr, "ord": ord, "map": map, "filter": filter,
         }
         
-        # Execute compiled code
-        exec(byte_code, ns)
+        # Try importing numpy/pandas if available
+        try:
+            import numpy as np
+            SAFE_BUILTINS["np"] = np
+            SAFE_BUILTINS["numpy"] = np
+        except ImportError:
+            pass
         
-    except SyntaxError as e:
-        return {"error": f"Syntax error: {e}", "passed": 0, "total": len(test_cases), "results": []}
-    except Exception as e:
-        return {"error": f"Execution error: {str(e)[:100]}", "passed": 0, "total": len(test_cases), "results": []}
+        try:
+            import pandas as pd
+            SAFE_BUILTINS["pd"] = pd
+            SAFE_BUILTINS["pandas"] = pd
+        except ImportError:
+            pass
+        
+        try:
+            # Simple exec without RestrictedPython
+            ns = {"__builtins__": SAFE_BUILTINS}
+            exec(code, ns)
+        except SyntaxError as e:
+            return {"error": f"Syntax error: {e}", "passed": 0, "total": len(test_cases), "results": []}
+        except Exception as e:
+            return {"error": f"Execution error: {str(e)[:100]}", "passed": 0, "total": len(test_cases), "results": []}
     
     # Get function from namespace
     fn = ns.get(func_name)
@@ -694,13 +784,17 @@ def _run_code(code: str, test_cases: list, func_name: str) -> dict:
             if isinstance(exp, set):
                 ok = set(out) == exp
             elif isinstance(exp, list) and exp and isinstance(exp[0], float):
-                ok = all(abs(a - b) < 1e-6 for a, b in zip(out, exp)) and len(out) == len(exp)
+                # Check if all values are within tolerance
+                try:
+                    ok = len(out) == len(exp) and all(abs(a - b) < 1e-6 for a, b in zip(out, exp))
+                except (TypeError, ValueError):
+                    ok = out == exp
             else:
                 ok = out == exp
             
-            results.append({"passed": ok, "output": repr(out), "expected": repr(exp)})
+            results.append({"passed": ok, "output": repr(out)[:100], "expected": repr(exp)[:100]})
         except Exception as e:
-            results.append({"passed": False, "output": f"Error: {str(e)[:50]}", "expected": repr(tc["expected"])})
+            results.append({"passed": False, "output": f"Error: {str(e)[:50]}", "expected": repr(tc["expected"])[:100]})
     
     passed = sum(1 for r in results if r["passed"])
     return {"results": results, "passed": passed, "total": len(test_cases), "error": None}
@@ -771,13 +865,32 @@ def level1_submit():
             ui = int(request.form.get(f"q{i}", -1))
         except (ValueError, TypeError):
             ui = -1
-        ok = (ui == q["answer"])
+        
+        # Support both old format (single "answer") and new format (list "correct_answers")
+        if "correct_answers" in q:
+            # New format: multiple valid answers
+            ok = ui in q["correct_answers"]
+            correct_indices = q["correct_answers"]
+        else:
+            # Legacy format: single answer (for backward compatibility)
+            ok = (ui == q["answer"])
+            correct_indices = [q["answer"]]
+        
         if ok:
             correct += 1
+        
+        # Show first correct answer or all if multiple
+        if len(correct_indices) == 1:
+            correct_answer_text = q["options"][correct_indices[0]]
+        else:
+            correct_answer_texts = [q["options"][idx] for idx in correct_indices]
+            correct_answer_text = " OR ".join(correct_answer_texts)
+        
         details.append({
             "question": q["q"],
             "your_answer": q["options"][ui] if 0 <= ui < len(q["options"]) else "Not answered",
-            "correct_answer": q["options"][q["answer"]],
+            "correct_answer": correct_answer_text,
+            "explanation": q.get("explanation", ""),  # Add explanation if available
             "correct": ok,
         })
 

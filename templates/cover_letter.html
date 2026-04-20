@@ -204,20 +204,20 @@
 
   {% if letter %}
   <div class="panel">
-    <h2 style="color:var(--accent2);margin-bottom:.5rem">Generated Cover Letter</h2>
+    <h2 style="color:var(--green-400);margin-bottom:.5rem">Generated Cover Letter</h2>
     <div class="letter-box" id="letterContent">{{ letter }}<button class="copy-btn" onclick="copyLetter()">📋 Copy</button></div>
   </div>
   {% endif %}
 
   {% if saved %}
   <div class="panel">
-    <h2 style="color:var(--accent);margin-bottom:.5rem">Previous Letters</h2>
+    <h2 style="color:var(--green-300);margin-bottom:.5rem">Previous Letters</h2>
     <div class="saved-list">
     {% for s in saved %}
     <div class="saved-item">
       <div class="saved-item-info">
         <strong>{{ s.role }}</strong> at {{ s.company }}
-        <div class="saved-item-meta">{{ s.created_at[:10] }}</div>
+        <div class="saved-item-meta">{{ s.created_at.strftime('%Y-%m-%d') }}</div>
       </div>
     </div>
     {% endfor %}

@@ -123,7 +123,7 @@ input::placeholder,textarea::placeholder{color:var(--gray-400);font-weight:300}
         <div class="recent-item">
           <div>
             <div class="recent-topic">{{ iv['topic'] }}</div>
-            <div class="recent-date">{{ iv['created_at'][:10] }}</div>
+            <div class="recent-date">{{ iv['created_at'].strftime('%Y-%m-%d') if iv['created_at'] else 'N/A' }}</div>
           </div>
           {% if iv['score'] %}
           <span class="score-pill {% if iv['score'] < 4 %}low{% elif iv['score'] < 7 %}mid{% endif %}">{{ iv['score'] }}/10</span>

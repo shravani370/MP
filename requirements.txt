@@ -5,6 +5,7 @@ requests
 gunicorn
 pypdf
 pandas
+numpy
 scikit-learn
 openai
 anthropic

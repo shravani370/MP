@@ -212,28 +212,93 @@ def google_login():
 @app.route("/callback")
 def callback():
     code = request.args.get("code")
+    error = request.args.get("error")
+    error_description = request.args.get("error_description")
+    
+    # Handle Google OAuth errors from redirect
+    if error:
+        app.logger.error(f"Google OAuth Error: {error} - {error_description}")
+        return f"Google Login Error: {error}<br>{error_description}"
+    
     if not code:
         return "Login failed ❌"
+    
     try:
-        token = requests.post(
+        # Log request parameters for debugging (don't log secrets in production)
+        app.logger.info(f"OAuth callback: code={code[:10]}..., redirect_uri={REDIRECT_URI}")
+        
+        # Exchange auth code for access token
+        token_data = {
+            "code": code,
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "redirect_uri": REDIRECT_URI,
+            "grant_type": "authorization_code"
+        }
+        
+        token_response = requests.post(
             "https://oauth2.googleapis.com/token",
-            data={
-                "code": code,
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "redirect_uri": REDIRECT_URI,
-                "grant_type": "authorization_code"
-            }
-        ).json()
-
+            data=token_data,
+            timeout=10
+        )
+        
+        # Log response status
+        app.logger.info(f"Token endpoint status: {token_response.status_code}")
+        
+        # Handle errors with response body
+        if token_response.status_code != 200:
+            error_details = token_response.text
+            try:
+                error_json = token_response.json()
+                error_details = error_json.get("error_description", error_json.get("error", error_details))
+            except:
+                pass
+            
+            app.logger.error(f"Token exchange failed: {error_details}")
+            return f"""
+            <h1>Token Exchange Failed</h1>
+            <p><strong>Status:</strong> {token_response.status_code}</p>
+            <p><strong>Error:</strong> {error_details}</p>
+            <p><strong>Debugging Info:</strong></p>
+            <ul>
+                <li>Redirect URI in request: <code>{REDIRECT_URI}</code></li>
+                <li>Client ID: <code>{CLIENT_ID[:20]}...</code></li>
+                <li>Ensure redirect URI matches Google Console exactly</li>
+            </ul>
+            <p><a href="/google-login">Try Again</a></p>
+            """
+        
+        token = token_response.json()
+        
         access_token = token.get("access_token")
-        user_info = requests.get(
-            "https://www.googleapis.com/oauth2/v2/userinfo",
-            headers={"Authorization": f"Bearer {access_token}"}
-        ).json()
+        if not access_token:
+            error_msg = token.get("error_description", token.get("error", "Unknown error"))
+            app.logger.error(f"No access token in response: {error_msg}")
+            return f"Failed to get access token: {error_msg}"
 
-        name = user_info.get("name")
+        # Fetch user information from Google
+        user_info_response = requests.get(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10
+        )
+        
+        if user_info_response.status_code != 200:
+            app.logger.error(f"Failed to get user info: {user_info_response.text}")
+            return f"Failed to get user information: {user_info_response.status_code}"
+        
+        user_info = user_info_response.json()
+
+        # Extract user data with fallbacks
         email = user_info.get("email")
+        if not email:
+            app.logger.error(f"No email in user info: {user_info}")
+            return "Failed to get email from Google account. Ensure email scope is granted."
+
+        # Use name from profile, fallback to email username if not available
+        name = user_info.get("name") or user_info.get("given_name") or email.split("@")[0]
+
+        app.logger.info(f"Google OAuth success for: {email}")
 
         # Check if user exists, create if not
         user = User.query.filter_by(email=email).first()
@@ -246,12 +311,18 @@ def callback():
             )
             db.session.add(user)
             db.session.commit()
+            app.logger.info(f"Created new user: {email}")
 
         set_secure_session(name, email)
         return redirect("/")
 
+    except requests.exceptions.RequestException as e:
+        app.logger.error(f"Request error in OAuth callback: {str(e)}")
+        return f"Network error: {str(e)}<br><a href='/google-login'>Try Again</a>"
     except Exception as e:
-        return f"Google Login Error: {e}"
+        import traceback
+        app.logger.error(f"Google OAuth Error: {str(e)}\n{traceback.format_exc()}")
+        return f"Google Login Error: {str(e)}<br><a href='/google-login'>Try Again</a>"
 
 # ================= HOME =================
 @app.route("/")

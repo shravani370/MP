@@ -19,7 +19,21 @@ def generate_question(
     """Generate an interview question using AI backend"""
     ai = get_ai_manager()
     asked_str = "\n".join(asked_questions or [])
-    history_str = "\n".join(history or [])
+    
+    # Format history: convert dicts to strings
+    if history:
+        history_items = []
+        for item in history:
+            if isinstance(item, dict):
+                role = item.get("role", "")
+                text = item.get("text", "")
+                history_items.append(f"{role}: {text}")
+            else:
+                history_items.append(str(item))
+        history_str = "\n".join(history_items)
+    else:
+        history_str = ""
+    
     prompt = f"""You are a senior technical interviewer specialising in {topic} (as of 2026).
 Focus on LATEST industry practices, modern frameworks, and current best practices.
 Generate ONE concise, relevant interview question that tests current knowledge.
