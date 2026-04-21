@@ -356,8 +356,16 @@ def dashboard():
         passed_count = sum(1 for r in all_results if r.passed)
         
         if all_results:
-            avg_score = sum((r.mcq_score and r.code_score and (r.mcq_score + r.code_score) / 2.0) or 0 
-                           for r in all_results) / total_attempts if total_attempts > 0 else 0
+            # Calculate average score from combined MCQ and code scores
+            valid_scores = []
+            for r in all_results:
+                if r.mcq_score is not None or r.code_score is not None:
+                    # Average of the two scores (handle None values)
+                    scores = [s for s in [r.mcq_score, r.code_score] if s is not None]
+                    if scores:
+                        valid_scores.append(sum(scores) / len(scores))
+            
+            avg_score = sum(valid_scores) / len(valid_scores) if valid_scores else 0
             avg_score = round(avg_score, 2)
         else:
             avg_score = 0
@@ -1831,4 +1839,9 @@ def handle_bad_request(e):
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.getenv("PORT", 5000))
+    try:
+        app.run(debug=True, port=port)
+    except OSError:
+        # If port is in use, try next port
+        app.run(debug=True, port=port+1)

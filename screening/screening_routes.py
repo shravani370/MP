@@ -1,8 +1,13 @@
 """Screening routes blueprint for interview screening functionality"""
+import time
+import random
+import logging
 from flask import Blueprint, render_template, session, request, redirect, url_for, flash
 from models.db import db, User, ScreeningResult
-from utils.ai_engine import generate_question
+from utils.ai_engine import generate_question, generate_mcq_questions, generate_coding_questions
 from functools import wraps
+
+logger = logging.getLogger(__name__)
 
 # Create Blueprint
 screening_bp = Blueprint('screening', __name__, url_prefix='')
@@ -477,9 +482,9 @@ CODING_POOLS = {
             "description": "Given an array of integers nums and an integer target, return the indices of the two numbers that add up to target. Each input has exactly one solution.\n\nExample:\n  Input:  nums = [2, 7, 11, 15], target = 9\n  Output: [0, 1]",
             "starter": "def two_sum(nums, target):\n    # write your solution here\n    pass\n",
             "test_cases": [
-                {"input": ([2, 7, 11, 15], 9), "expected": {0, 1}},
-                {"input": ([3, 2, 4], 6),       "expected": {1, 2}},
-                {"input": ([3, 3], 6),           "expected": {0, 1}},
+                {"input": ([2, 7, 11, 15], 9), "expected": [0, 1]},
+                {"input": ([3, 2, 4], 6),       "expected": [1, 2]},
+                {"input": ([3, 3], 6),           "expected": [0, 1]},
             ],
         },
         {
@@ -591,6 +596,7 @@ ROLE_ALIASES = {
     "ml engineer":           ["ml engineer", "mlops", "machine learning engineer", "ai engineer", "deep learning engineer"],
     "devops engineer":       ["devops", "dev ops", "sre", "site reliability", "platform engineer", "cloud engineer", "infrastructure engineer", "kubernetes", "terraform"],
     "cybersecurity analyst": ["security", "cyber", "infosec", "penetration", "pentest", "soc analyst", "security engineer", "security analyst"],
+    "mobile developer":      ["android", "ios", "mobile", "flutter", "react native", "kotlin", "swift"],
 }
 
 
@@ -780,9 +786,12 @@ def _run_code(code: str, test_cases: list, func_name: str) -> dict:
             
             exp = tc["expected"]
             
-            # Compare results (handle floating point comparisons)
+            # Compare results (handle floating point comparisons and set-like comparisons)
             if isinstance(exp, set):
                 ok = set(out) == exp
+            elif isinstance(exp, list) and exp and all(isinstance(x, int) for x in exp) and func_name == "two_sum":
+                # For two_sum, order doesn't matter - compare as sets
+                ok = set(out) == set(exp) if isinstance(out, (list, tuple)) else False
             elif isinstance(exp, list) and exp and isinstance(exp[0], float):
                 # Check if all values are within tolerance
                 try:
@@ -925,36 +934,8 @@ def level2():
     role = session.get("pending_role", "Software Engineer")
     session["code_start"] = time.time()
     
-    # Generate coding questions using AI
-    questions = generate_coding_questions(role, n=2)
-    
-    # Retry if first attempt fails
-    retry = 0
-    while not questions and retry < 2:
-        questions = generate_coding_questions(role, n=2)
-        retry += 1
-    
-    # Fallback to hardcoded coding pool if AI generation failed
-    if not questions:
-        role_lower = role.lower()
-        pool_key = None
-        
-        # Try to find matching pool by role name
-        for key in CODING_POOLS.keys():
-            if key.lower() in role_lower or role_lower in key.lower():
-                pool_key = key
-                break
-        
-        # Use data analyst pool as default if no exact match found
-        if not pool_key:
-            pool_key = "data analyst"
-        
-        # Sample 2 random questions from the pool
-        if pool_key in CODING_POOLS and CODING_POOLS[pool_key]:
-            questions = random.sample(CODING_POOLS[pool_key], min(2, len(CODING_POOLS[pool_key])))
-        else:
-            # Last resort: use data analyst pool
-            questions = random.sample(CODING_POOLS.get("data analyst", []), min(2, len(CODING_POOLS.get("data analyst", []))))
+    # Use hardcoded coding pool matched to role
+    questions = _pick_coding(role, n=2)
     
     session["coding_questions"] = questions if questions else []
 
@@ -981,14 +962,54 @@ def level2_submit():
 
     pct    = int(total_p / total_t * 100) if total_t else 0
     passed = pct >= CODE_PASS_SCORE
+    # Both MCQ and Code must pass to advance
+    both_passed = session.get("mcq_passed") and passed
     session.update({"code_score": pct, "code_results": code_results, "code_passed": passed,
-                    "screening_stage": 3 if passed else 0})
+                    "screening_stage": 3 if both_passed else 0})
     return redirect(url_for("screening.level2_result"))
 
 
 @screening_bp.route("/screening/level2/result")
 @_login_required
 def level2_result():
+    # If both MCQ and Code passed, save and redirect to interview
+    if session.get("screening_stage") == 3:
+        # Save screening result to database
+        try:
+            user_email = session.get('email')
+            user_id = session.get('user_id')
+            
+            # Fallback: query user if user_id not in session
+            if not user_id and user_email:
+                user = User.query.filter_by(email=user_email).first()
+                if user:
+                    user_id = user.id
+            
+            if user_id:
+                mcq_score = session.get("mcq_score")
+                code_score = session.get("code_score")
+                role = session.get("pending_role", "")
+                
+                if mcq_score is not None and code_score is not None:
+                    result = ScreeningResult(
+                        user_id=user_id,
+                        email=user_email or "",
+                        role=role,
+                        mcq_score=mcq_score,
+                        code_score=code_score,
+                        passed=1
+                    )
+                    db.session.add(result)
+                    db.session.commit()
+                    logger.info(f"Saved screening result for user {user_id}: {role} (MCQ: {mcq_score}, Code: {code_score})")
+        except Exception as e:
+            logger.error(f"Error saving screening result: {e}")
+            db.session.rollback()
+        
+        # Redirect to level3 to start interview
+        return redirect(url_for("screening.level3"))
+    
+    # If didn't pass, show results page
     return render_template("screening/level2_result.html",
                            score=session.get("code_score", 0),
                            passed=session.get("code_passed", False),
